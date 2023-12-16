@@ -34,7 +34,7 @@ from sklearn.model_selection import KFold
 
 
 class Tweetyclr:
-    def __init__(self, num_spec, window_size, stride, folder_name, all_songs_data, masking_freq_tuple, spec_dim_tuple, exclude_transitions = False):
+    def __init__(self, num_spec, window_size, stride, folder_name, all_songs_data, masking_freq_tuple, spec_dim_tuple, category_colors = None):
         '''The init function should define:
             1. directory for bird
             2. directory for python files
@@ -57,7 +57,7 @@ class Tweetyclr:
         self.masking_freq_tuple = masking_freq_tuple
         self.freq_dim = spec_dim_tuple[1]
         self.time_dim = spec_dim_tuple[0]
-        self.exclude_transitions = exclude_transitions
+        self.category_colors = category_colors
 
         # Create the folder if it doesn't already exist
         if not os.path.exists(folder_name+"/Plots/Window_Plots"):
@@ -71,7 +71,7 @@ class Tweetyclr:
         # For each spectrogram we will extract
         # 1. Each timepoint's syllable label
         # 2. The spectrogram itself
-        # stacked_labels = [] 
+        stacked_labels = [] 
         stacked_specs = []
         for i in np.arange(self.num_spec):
             # Extract the data within the numpy file. We will use this to create the spectrogram
@@ -79,7 +79,7 @@ class Tweetyclr:
             spec = dat['s']
             times = dat['t']
             frequencies = dat['f']
-            # labels = dat['labels']
+            labels = dat['label']
             # labels = labels.T
 
 
@@ -89,30 +89,33 @@ class Tweetyclr:
 
             subsetted_spec = spec[mask.reshape(mask.shape[0],),:]
             
-            # stacked_labels.append(labels)
+            stacked_labels.append(labels)
             stacked_specs.append(subsetted_spec)
 
             
         stacked_specs = np.concatenate((stacked_specs), axis = 1)
-        # stacked_labels = np.concatenate((stacked_labels), axis = 0)
+        stacked_labels = np.concatenate((stacked_labels), axis = 0)
         # stacked_labels.shape = (stacked_labels.shape[0],1)
 
 
         # Get a list of unique categories (syllable labels)
-        # unique_categories = np.unique(stacked_labels)
-        # if self.category_colors == None:
-        #     self.category_colors = {category: np.random.rand(3,) for category in unique_categories}
+        unique_categories = np.unique(stacked_labels)
+        print(unique_categories)
+        print(self.category_colors)
+        if self.category_colors == None:
+            self.category_colors = {category: np.random.rand(3,) for category in unique_categories}
         #     self.category_colors[0] = np.zeros((3)) # SIlence should be black
         #     # open a file for writing in binary mode
-        #     with open(f'{self.folder_name}/category_colors.pkl', 'wb') as f:
-        #         # write the dictionary to the file using pickle.dump()
-        #         pickle.dump(self.category_colors, f)
+            with open(f'{self.folder_name}/category_colors.pkl', 'wb') as f:
+                # write the dictionary to the file using pickle.dump()
+                pickle.dump(self.category_colors, f)
 
+        print(self.category_colors)
         spec_for_analysis = stacked_specs.T
         window_labels_arr = []
         embedding_arr = []
         # Find the exact sampling frequency (the time in miliseconds between one pixel [timepoint] and another pixel)
-        print(times.shape)
+        # print(times.shape)
         dx = np.diff(times)[0,0]
 
         # We will now extract each mini-spectrogram from the full spectrogram
@@ -131,39 +134,40 @@ class Tweetyclr:
             # We will flatten the window to be a 1D vector
             window = window.reshape(1, window.shape[0]*window.shape[1])
             # Extract the syllable labels for the window
-            # labels_for_window = stacked_labels[i:i+self.window_size, :]
+            labels_for_window = stacked_labels[i:i+self.window_size]
             # Reshape the syllable labels for the window into a 1D array
             # labels_for_window = labels_for_window.reshape(1, labels_for_window.shape[0]*labels_for_window.shape[1])
             # Populate the empty lists defined above
             stacked_windows.append(window)
-            # stacked_labels_for_window.append(labels_for_window)
+            stacked_labels_for_window.append(labels_for_window)
             stacked_window_times.append(window_times)
 
         # Convert the populated lists into a stacked numpy array
         stacked_windows = np.stack(stacked_windows, axis = 0)
         stacked_windows = np.squeeze(stacked_windows)
 
-        # stacked_labels_for_window = np.stack(stacked_labels_for_window, axis = 0)
-        # stacked_labels_for_window = np.squeeze(stacked_labels_for_window)
+        stacked_labels_for_window = np.stack(stacked_labels_for_window, axis = 0)
+        stacked_labels_for_window = np.squeeze(stacked_labels_for_window)
+        print(f'Stacked labels for window shape: {stacked_labels_for_window.shape}')
 
         stacked_window_times = np.stack(stacked_window_times, axis = 0)
         # dict_of_spec_slices_with_slice_number = {i: stacked_windows[i, :] for i in range(stacked_windows.shape[0])}
 
         # # For each mini-spectrogram, find the average color across all unique syllables
-        # mean_colors_per_minispec = np.zeros((stacked_labels_for_window.shape[0], 3))
-        # for i in np.arange(stacked_labels_for_window.shape[0]):
-        #     list_of_colors_for_row = [self.category_colors[x] for x in stacked_labels_for_window[i,:]]
-        #     all_colors_in_minispec = np.array(list_of_colors_for_row)
-        #     mean_color = np.mean(all_colors_in_minispec, axis = 0)
-        #     mean_colors_per_minispec[i,:] = mean_color
+        mean_colors_per_minispec = np.zeros((stacked_labels_for_window.shape[0], 3))
+        for i in np.arange(stacked_labels_for_window.shape[0]):
+            list_of_colors_for_row = [self.category_colors[x] for x in stacked_labels_for_window[i,:]]
+            all_colors_in_minispec = np.array(list_of_colors_for_row)
+            mean_color = np.mean(all_colors_in_minispec, axis = 0)
+            mean_colors_per_minispec[i,:] = mean_color
 
         self.stacked_windows = stacked_windows
-        # self.stacked_labels_for_window = stacked_labels_for_window
-        # self.mean_colors_per_minispec = mean_colors_per_minispec
+        self.stacked_labels_for_window = stacked_labels_for_window
+        self.mean_colors_per_minispec = mean_colors_per_minispec
         self.stacked_window_times = stacked_window_times
         self.masked_frequencies = masked_frequencies
         self.stacked_specs = stacked_specs
-        # self.stacked_labels = stacked_labels
+        self.stacked_labels = stacked_labels
         # self.dict_of_spec_slices_with_slice_number = dict_of_spec_slices_with_slice_number
 
 
