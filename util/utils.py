@@ -329,8 +329,7 @@ class Tweetyclr:
         )) for i in np.arange(len(indices_of_interest))
         ]
         
-        # Easy negatives: randomly sample p points from outside the bound box 
-        # region.
+        # Easy negatives: randomly sample p points from outside the bound box region.
         
         # For the testing dataset, I want to have easy negatives that are not
         # in common with the easy negatives from training. Therefore I have 
@@ -451,9 +450,21 @@ class Temporal_Augmentation:
         except ValueError as e:
             print(f"Encountered KeyError: {e}. Press Enter to continue...")
             input()
-            
 
-        return positive_aug_data
+        # Define the noise scale (e.g., 5% of the data range)
+        noise_scale = 0.3
+
+        # Generate uniform noise and scale it
+        noise = torch.rand_like(positive_aug_data) * noise_scale
+
+        # Add the noise to the original tensor
+        noisy_tensor = positive_aug_data + noise
+
+        # Clip values to be between 0 and 1
+        noisy_tensor_clipped = torch.clamp(noisy_tensor, 0, 1)
+
+        
+        return noisy_tensor_clipped
 
 class Custom_Contrastive_Dataset(Dataset):
     def __init__(self, tensor_data, tensor_labels, transform=None):
