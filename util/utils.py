@@ -79,8 +79,8 @@ class Tweetyclr:
             spec = dat['s']
             times = dat['t']
             frequencies = dat['f']
-            labels = dat['label']
-            # labels = labels.T
+            labels = dat['labels']
+            labels = labels.T
 
 
             # Let's get rid of higher order frequencies
@@ -95,13 +95,14 @@ class Tweetyclr:
             
         stacked_specs = np.concatenate((stacked_specs), axis = 1)
         stacked_labels = np.concatenate((stacked_labels), axis = 0)
-        # stacked_labels.shape = (stacked_labels.shape[0],1)
+        print(stacked_labels)
+        stacked_labels.shape = (stacked_labels.shape[0],1)
 
 
         # Get a list of unique categories (syllable labels)
         unique_categories = np.unique(stacked_labels)
-        print(unique_categories)
-        print(self.category_colors)
+        # print(unique_categories)
+        # print(self.category_colors)
         if self.category_colors == None:
             self.category_colors = {category: np.random.rand(3,) for category in unique_categories}
         #     self.category_colors[0] = np.zeros((3)) # SIlence should be black
@@ -110,7 +111,7 @@ class Tweetyclr:
                 # write the dictionary to the file using pickle.dump()
                 pickle.dump(self.category_colors, f)
 
-        print(self.category_colors)
+        # print(self.category_colors)
         spec_for_analysis = stacked_specs.T
         window_labels_arr = []
         embedding_arr = []
@@ -134,9 +135,9 @@ class Tweetyclr:
             # We will flatten the window to be a 1D vector
             window = window.reshape(1, window.shape[0]*window.shape[1])
             # Extract the syllable labels for the window
-            labels_for_window = stacked_labels[i:i+self.window_size]
+            labels_for_window = stacked_labels[i:i+self.window_size,:]
             # Reshape the syllable labels for the window into a 1D array
-            # labels_for_window = labels_for_window.reshape(1, labels_for_window.shape[0]*labels_for_window.shape[1])
+            labels_for_window = labels_for_window.reshape(1, labels_for_window.shape[0]*labels_for_window.shape[1])
             # Populate the empty lists defined above
             stacked_windows.append(window)
             stacked_labels_for_window.append(labels_for_window)
