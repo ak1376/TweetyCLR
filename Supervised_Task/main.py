@@ -37,7 +37,7 @@ analysis_path = f'{filepath}/Dropbox (University of Oregon)/Kapoor_Ananya/01_Pro
 # analysis_path = '/home/akapoor/Dropbox (University of Oregon)/Kapoor_Ananya/01_Projects/01_b_Canary_SSL/TweetyCLR_Repo/'
 
 # # Parameters we set
-num_spec = 80
+num_spec = 1
 window_size = 100
 stride = 10
 
@@ -104,32 +104,32 @@ simple_tweetyclr.first_time_analysis()
 
 
 
-embed = np.load(f'{simple_tweetyclr.folder_name}/embed_of_stacked_windows_hamming.npy')
+# embed = np.load(f'{simple_tweetyclr.folder_name}/embed_of_stacked_windows_hamming.npy')
 
-plt.figure()
-plt.scatter(embed[:,0], embed[:,1], c = simple_tweetyclr.mean_colors_per_minispec)
-plt.suptitle("UMAP Decomposition of Spectrograms Using Hamming Distance Similarity")
-plt.title(f'Number of Slices: {embed.shape[0]}')
-plt.savefig(f'{simple_tweetyclr.folder_name}/Plots/umap_decomp_of_spec_slice_hamming.png')
-plt.show()
+# plt.figure()
+# plt.scatter(embed[:,0], embed[:,1], c = simple_tweetyclr.mean_colors_per_minispec)
+# plt.suptitle("UMAP Decomposition of Spectrograms Using Hamming Distance Similarity")
+# plt.title(f'Number of Slices: {embed.shape[0]}')
+# plt.savefig(f'{simple_tweetyclr.folder_name}/Plots/umap_decomp_of_spec_slice_hamming.png')
+# plt.show()
 
 
 total_dataset = TensorDataset(torch.tensor(simple_tweetyclr.stacked_windows.reshape(simple_tweetyclr.stacked_windows.shape[0], 1, 100, 151)))
 batch_size = 64
 total_dataloader = DataLoader(total_dataset, batch_size=batch_size , shuffle=False)
 
-list_of_images = []
-for batch_idx, (data) in enumerate(total_dataloader):
-    data = data[0]
+# list_of_images = []
+# for batch_idx, (data) in enumerate(total_dataloader):
+#     data = data[0]
 
-    for image in data:
-        list_of_images.append(image)
+#     for image in data:
+#         list_of_images.append(image)
 
-list_of_images = [tensor.numpy() for tensor in list_of_images]
+# list_of_images = [tensor.numpy() for tensor in list_of_images]
 
-embeddable_images = simple_tweetyclr.get_images(list_of_images)
+# embeddable_images = simple_tweetyclr.get_images(list_of_images)
 
-simple_tweetyclr.plot_UMAP_embedding(embed, simple_tweetyclr.mean_colors_per_minispec, embeddable_images, f'{simple_tweetyclr.folder_name}/Plots/UMAP_of_window_labels_hamming.html', saveflag = True)
+# simple_tweetyclr.plot_UMAP_embedding(embed, simple_tweetyclr.mean_colors_per_minispec, embeddable_images, f'{simple_tweetyclr.folder_name}/Plots/UMAP_of_window_labels_hamming.html', saveflag = True)
 
 
 
@@ -212,9 +212,12 @@ class Encoder(nn.Module):
         # x_flattened = x.view(1, -1)
         # x = x.permute(0, x.shape[1]*x.shape[2]*x.shape[3])
         x = F.relu(self.fc(x_flattened))
-        
-        pairwise_differences = [torch.abs(obs2 - obs1) for obs1, obs2 in itertools.combinations(x, 2)]
-        pairwise_differences = torch.cat(pairwise_differences, dim = 0)
+        if x.shape[0] == 1:
+            pairwise_differences = torch.tensor(0).to(torch.float32)
+            pairwise_differences.requires_grad = True
+        else:
+            pairwise_differences = [torch.abs(obs2 - obs1) for obs1, obs2 in itertools.combinations(x, 2)]
+            pairwise_differences = torch.cat(pairwise_differences, dim = 0)
         
         hamming_like_distance = torch.sum(pairwise_differences)
         
@@ -262,7 +265,7 @@ train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True)
 
 model = Encoder()
-optimizer = optim.Adam(model.parameters(), lr=0.01)
+optimizer = optim.Adam(model.parameters(), lr=1e-4)
 criterion = nn.MSELoss()  # MSE Loss
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -270,10 +273,12 @@ model.to(device)
 accumulation_steps = 1
 num_epochs = 500
 
-epoch_loss = []
+epoch_loss_train = []
+epoch_loss_test = []
 for epoch in range(num_epochs):
     model.train()  # Set model to training mode
-    batch_loss = 0
+    batch_loss_train = 0
+    batch_loss_test = 0
     for i, (inputs, labels) in enumerate(train_loader):
         # Transfer inputs and labels to the GPU
         inputs = inputs.to(device, dtype=torch.float32)
@@ -281,8 +286,12 @@ for epoch in range(num_epochs):
         
         pred_hamming = model(inputs)
         
-        actual_hamming = [(obs2 != obs1).sum().unsqueeze(0) for obs1, obs2 in itertools.combinations(labels, 2)]
-        actual_hamming = torch.cat(actual_hamming, dim = 0)
+        if labels.shape[0] == 1:
+            actual_hamming = torch.tensor(0)
+        else:
+            actual_hamming = [(obs2 != obs1).sum().unsqueeze(0) for obs1, obs2 in itertools.combinations(labels, 2)]
+            actual_hamming = torch.cat(actual_hamming, dim = 0)
+            
         actual_hamming = torch.sum(actual_hamming).to(torch.float32)
         
         # actual_hamming = (labels[0,:] != labels[1,:]).sum().to(torch.float32)
@@ -298,43 +307,82 @@ for epoch in range(num_epochs):
             optimizer.step()
             optimizer.zero_grad()
 
-        batch_loss += loss.item()
+        batch_loss_train += loss.item()
+        
+        break
+        
+    model.eval()
+        
+    for i, (inputs, labels) in enumerate(test_loader):
+        inputs = inputs.to(device, dtype=torch.float32)
+        labels = labels.to(device, dtype=torch.float32)
+        
+        pred_hamming = model(inputs)
+        
+        actual_hamming = [(obs2 != obs1).sum().unsqueeze(0) for obs1, obs2 in itertools.combinations(labels, 2)]
+        actual_hamming = torch.cat(actual_hamming, dim = 0)
+        actual_hamming = torch.sum(actual_hamming).to(torch.float32)
+        
+        # actual_hamming = (labels[0,:] != labels[1,:]).sum().to(torch.float32)
+        # actual_hamming = actual_hamming.view(1, 1)
+        loss = criterion(pred_hamming, actual_hamming)
+        
+        # Scales the loss, and calls backward() to accumulate gradients
+        loss = loss / accumulation_steps
+        
+        batch_loss_test += loss.item()
+        
+        break
+        
+                        
         
 
     # Logging the loss averaged over an epoch
-    epoch_loss.append(batch_loss)
+    epoch_loss_train.append(batch_loss_train)
+    epoch_loss_test.append(batch_loss_test)
+    # epoch_loss_train.append(batch_loss_train/len(train_loader))
+    # epoch_loss_test.append(batch_loss_test/len(test_loader))
     # epoch_loss.append(batch_loss / len(train_loader))
 
-    print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {epoch_loss[-1]}')
+    print(f'Epoch [{epoch+1}/{num_epochs}], Train Loss: {epoch_loss_train[-1]}, Test Loss: {epoch_loss_test[-1]}')
     
-    
+
+epoch_loss_train_arr = np.array(epoch_loss_train)
+epoch_loss_test_arr = np.array(epoch_loss_test)
+
 plt.figure()
-plt.plot(epoch_loss)
+plt.plot(np.log(epoch_loss_train_arr + 1e-5), label = 'Train Loss')
+plt.plot(np.log(epoch_loss_test_arr + 1e-5), label = 'Validation Loss')
+plt.axhline(np.log(1e-5), color = 'red', linestyle = '--', label = 'Lowest Possible Loss')
+plt.legend()
+plt.title("Loss Curve")
+plt.xlabel("Epoch")
+plt.ylabel("log(loss + 1e-5)")
 plt.show()
 
-model_rep = []
+# model_rep = []
 
-model.eval()
-with torch.no_grad():
-    for i, (inputs, labels) in enumerate(total_dataloader):
-        inputs = inputs.to(device, dtype=torch.float32)
-        labels = labels.to(device, dtype=torch.float32)
+# model.eval()
+# with torch.no_grad():
+#     for i, (inputs, labels) in enumerate(total_dataloader):
+#         inputs = inputs.to(device, dtype=torch.float32)
+#         labels = labels.to(device, dtype=torch.float32)
     
-        x = F.relu(model.bn1(model.conv1(inputs)))
-        x = F.relu(model.bn2(model.conv2(x)))
-        x = F.relu(model.bn3(model.conv3(x)))
-        x = F.relu(model.bn4(model.conv4(x)))
-        x = F.relu(model.bn5(model.conv5(x)))
-        x = F.relu(model.bn6(model.conv6(x)))
-        x = F.relu(model.bn7(model.conv7(x)))
-        x = F.relu(model.bn8(model.conv8(x)))
-        x = F.relu(model.bn9(model.conv9(x)))
-        x = F.relu(model.bn10(model.conv10(x)))
+#         x = F.relu(model.bn1(model.conv1(inputs)))
+#         x = F.relu(model.bn2(model.conv2(x)))
+#         x = F.relu(model.bn3(model.conv3(x)))
+#         x = F.relu(model.bn4(model.conv4(x)))
+#         x = F.relu(model.bn5(model.conv5(x)))
+#         x = F.relu(model.bn6(model.conv6(x)))
+#         x = F.relu(model.bn7(model.conv7(x)))
+#         x = F.relu(model.bn8(model.conv8(x)))
+#         x = F.relu(model.bn9(model.conv9(x)))
+#         x = F.relu(model.bn10(model.conv10(x)))
 
-        x_flattened = x.view(-1, 320)
-        model_rep.append(x_flattened.clone().detach().numpy())
+#         x_flattened = x.view(-1, 320)
+#         model_rep.append(x_flattened.clone().detach().numpy())
         
-model_rep1 = np.concatenate((model_rep))    
+# model_rep1 = np.concatenate((model_rep))    
         
 
 
