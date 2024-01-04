@@ -25,6 +25,8 @@ import umap
 import matplotlib.pyplot as plt
 import torch.optim as optim
 import itertools
+import inspect
+
 
 plt.rcParams.update({'font.size': 20})
 plt.rcParams['figure.figsize'] = [15, 15]  # width and height should be in inches, e.g., [10, 6]
@@ -115,7 +117,7 @@ simple_tweetyclr.first_time_analysis()
 
 
 total_dataset = TensorDataset(torch.tensor(simple_tweetyclr.stacked_windows.reshape(simple_tweetyclr.stacked_windows.shape[0], 1, 100, 151)))
-batch_size = 64
+batch_size = 2
 total_dataloader = DataLoader(total_dataset, batch_size=batch_size , shuffle=False)
 
 # list_of_images = []
@@ -185,33 +187,34 @@ class Encoder(nn.Module):
 
     def forward(self, x):
 
-        # x = F.relu((self.conv1(x)))
-        # x = F.relu((self.conv2(x)))
-        # x = F.relu((self.conv3(x)))
-        # x = F.relu((self.conv4(x)))
-        # x = F.relu((self.conv5(x)))
-        # x = F.relu((self.conv6(x)))
-        # x = F.relu((self.conv7(x)))
-        # x = F.relu((self.conv8(x)))
-        # x = F.relu((self.conv9(x)))
-        # x = F.relu((self.conv10(x)))
+        x = F.relu((self.conv1(x)))
+        x = F.relu((self.conv2(x)))
+        x = F.relu((self.conv3(x)))
+        x = F.relu((self.conv4(x)))
+        x = F.relu((self.conv5(x)))
+        x = F.relu((self.conv6(x)))
+        x = F.relu((self.conv7(x)))
+        x = F.relu((self.conv8(x)))
+        x = F.relu((self.conv9(x)))
+        x = F.relu((self.conv10(x)))
 
     
-        x = F.relu(self.bn1(self.conv1(x)))
-        x = F.relu(self.bn2(self.conv2(x)))
-        x = F.relu(self.bn3(self.conv3(x)))
-        x = F.relu(self.bn4(self.conv4(x)))
-        x = F.relu(self.bn5(self.conv5(x)))
-        x = F.relu(self.bn6(self.conv6(x)))
-        x = F.relu(self.bn7(self.conv7(x)))
-        x = F.relu(self.bn8(self.conv8(x)))
-        x = F.relu(self.bn9(self.conv9(x)))
-        x = F.relu(self.bn10(self.conv10(x)))
+        # x = F.relu(self.bn1(self.conv1(x)))
+        # x = F.relu(self.bn2(self.conv2(x)))
+        # x = F.relu(self.bn3(self.conv3(x)))
+        # x = F.relu(self.bn4(self.conv4(x)))
+        # x = F.relu(self.bn5(self.conv5(x)))
+        # x = F.relu(self.bn6(self.conv6(x)))
+        # x = F.relu(self.bn7(self.conv7(x)))
+        # x = F.relu(self.bn8(self.conv8(x)))
+        # x = F.relu(self.bn9(self.conv9(x)))
+        # x = F.relu(self.bn10(self.conv10(x)))
 
         x_flattened = x.view(-1, 320)
         # x_flattened = x.view(1, -1)
         # x = x.permute(0, x.shape[1]*x.shape[2]*x.shape[3])
-        x = F.relu(self.fc(x_flattened))
+        # x = F.relu(self.fc(x_flattened))
+        x = F.sigmoid(self.fc(x_flattened))
         if x.shape[0] == 1:
             pairwise_differences = torch.tensor(0).to(torch.float32)
             pairwise_differences.requires_grad = True
@@ -253,7 +256,8 @@ total_dataloader = DataLoader(dataset, batch_size=batch_size , shuffle=False)
 
 
 # Define the split sizes
-train_size = int(0.8 * len(dataset))  # 80% for training
+train_perc = 0.8
+train_size = int(train_perc * len(dataset))  # 80% for training
 test_size = len(dataset) - train_size  # 20% for testing
 
 # Split the dataset
@@ -265,13 +269,15 @@ train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True)
 
 model = Encoder()
-optimizer = optim.Adam(model.parameters(), lr=1e-4)
+optimizer = optim.Adam(model.parameters(), lr=0.01)
 criterion = nn.MSELoss()  # MSE Loss
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 model.to(device)
 accumulation_steps = 1
-num_epochs = 500
+num_epochs = 1000
+
+predictions = []
 
 epoch_loss_train = []
 epoch_loss_test = []
@@ -285,12 +291,13 @@ for epoch in range(num_epochs):
         labels = labels.to(device, dtype=torch.float32)
         
         pred_hamming = model(inputs)
+        predictions.append(pred_hamming.item())
         
         if labels.shape[0] == 1:
             actual_hamming = torch.tensor(0)
         else:
             actual_hamming = [(obs2 != obs1).sum().unsqueeze(0) for obs1, obs2 in itertools.combinations(labels, 2)]
-            actual_hamming = torch.cat(actual_hamming, dim = 0)
+            actual_hamming = torch.cat(actual_hamming, dim = 0)/100
             
         actual_hamming = torch.sum(actual_hamming).to(torch.float32)
         
@@ -311,6 +318,7 @@ for epoch in range(num_epochs):
         
         break
         
+        
     model.eval()
         
     for i, (inputs, labels) in enumerate(test_loader):
@@ -320,7 +328,7 @@ for epoch in range(num_epochs):
         pred_hamming = model(inputs)
         
         actual_hamming = [(obs2 != obs1).sum().unsqueeze(0) for obs1, obs2 in itertools.combinations(labels, 2)]
-        actual_hamming = torch.cat(actual_hamming, dim = 0)
+        actual_hamming = torch.cat(actual_hamming, dim = 0)/100
         actual_hamming = torch.sum(actual_hamming).to(torch.float32)
         
         # actual_hamming = (labels[0,:] != labels[1,:]).sum().to(torch.float32)
@@ -334,9 +342,6 @@ for epoch in range(num_epochs):
         
         break
         
-                        
-        
-
     # Logging the loss averaged over an epoch
     epoch_loss_train.append(batch_loss_train)
     epoch_loss_test.append(batch_loss_test)
@@ -344,7 +349,7 @@ for epoch in range(num_epochs):
     # epoch_loss_test.append(batch_loss_test/len(test_loader))
     # epoch_loss.append(batch_loss / len(train_loader))
 
-    print(f'Epoch [{epoch+1}/{num_epochs}], Train Loss: {epoch_loss_train[-1]}, Test Loss: {epoch_loss_test[-1]}')
+    print(f'Epoch [{epoch+1}/{num_epochs}], Train Loss: {epoch_loss_train[-1]:.4f}, Test Loss: {epoch_loss_test[-1]:.4f}')
     
 
 epoch_loss_train_arr = np.array(epoch_loss_train)
@@ -359,6 +364,69 @@ plt.title("Loss Curve")
 plt.xlabel("Epoch")
 plt.ylabel("log(loss + 1e-5)")
 plt.show()
+
+# Let's save the parameters from this experiment (this will go in the utils
+# file later)
+
+# Here are the parameters I want to save:
+# 1. Data parameters: 
+    # a. Number of spectrograms for analysis
+    # b. Stride
+    # c. Window size
+    # d. Total number of spectrogram slices
+    # e. Whether any standardization was applied
+
+# 2. Model parameters: 
+    # a. Optimizer type and Learning rate
+    # b. Batch size 
+    # c. Number of epochs
+    # d. Random seed
+    # e. Accumulation? 
+    # f. Train/Test split? If so, what is the proportion?
+    # g. Model architecture & any regularlization. 
+    # h. Criterion
+    
+# data_params = {
+#     "Data_Directory": bird_dir,
+#     "Window_Size": simple_tweetyclr.window_size, 
+#     "Stride_Size": simple_tweetyclr.stride, 
+#     "Num_Spectrograms": simple_tweetyclr.num_spec, 
+#     "Total_Slices": simple_tweetyclr.stacked_windows.shape[0], 
+#     "Frequencies_of_Interest": masking_freq_tuple, 
+#     "Data_Standardization": "None"
+#     }
+
+model_arch = str(model)
+forward_method = inspect.getsource(model.forward)
+
+# Splitting the string into an array of lines
+model_arch_lines = model_arch.split('\n')
+forward_method_lines = forward_method.split('\n')
+
+
+experiment_params = {
+    "Data_Directory": bird_dir,
+    "Window_Size": simple_tweetyclr.window_size, 
+    "Stride_Size": simple_tweetyclr.stride, 
+    "Num_Spectrograms": simple_tweetyclr.num_spec, 
+    "Total_Slices": simple_tweetyclr.stacked_windows.shape[0], 
+    "Frequencies_of_Interest": masking_freq_tuple, 
+    "Data_Standardization": "None",
+    "Optimizer": str(optimizer), 
+    "Batch_Size": batch_size, 
+    "Num_Epochs": num_epochs, 
+    "Torch_Random_Seed": 295, 
+    "Accumulation_Size": 1, 
+    "Train_Proportion": train_perc,
+    "Criterion": str(criterion), 
+    "Model_Architecture": model_arch_lines, 
+    "Forward_Method": forward_method_lines
+    }
+
+import json
+
+with open(f'{simple_tweetyclr.folder_name}/experiment_params.json', 'w') as file:
+    json.dump(experiment_params, file, indent=4)
 
 # model_rep = []
 
@@ -384,7 +452,7 @@ plt.show()
         
 # model_rep1 = np.concatenate((model_rep))    
         
-
+# Write the experiment information to a txt file 
 
 
 

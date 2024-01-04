@@ -27,10 +27,10 @@ import scipy.signal as signal
 from scipy.io.wavfile import write
 import pandas as pd
 import seaborn as sns 
-import umap
+# import umap
 import os 
 
-folderpath = '/Users/ananyakapoor/Dropbox (University of Oregon)/Kapoor_Ananya/01_Projects/01_b_Canary_SSL/Canary_SSL_Repo/'
+folderpath = '/Users/AnanyaKapoor/Dropbox (University of Oregon)/Kapoor_Ananya/01_Projects/01_b_Canary_SSL/TweetyCLR_End_to_End/'
 sns.set(style='white', context='notebook', rc={'figure.figsize':(14,10)})
 
 plt.ioff()
@@ -76,7 +76,7 @@ unique_syllables = np.arange(1, num_syllables+1)
 syllable_phrase_order = unique_syllables.copy()
 phrase_repeats = 5
 
-num_songs = 2
+num_songs = 1
 
 radius_value = 0.01
 
@@ -120,7 +120,7 @@ for song_index in np.arange(num_songs):
     syllable_phrase_order_songs[song_index,:] = syllable_phrase_order
     
     syllable_phrase_order_w_repeats = np.repeat(syllable_phrase_order, phrase_repeats) # Now add the number of phrase repeats 
-    
+    np.random.shuffle(syllable_phrase_order_w_repeats)
     
 
     phi_0_vector = []
