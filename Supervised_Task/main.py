@@ -27,8 +27,10 @@ import torch.optim as optim
 import itertools
 import inspect
 import torch.nn.init as init
-
-
+import random
+torch.manual_seed(295)
+np.random.seed(295)
+random.seed(295)
 
 plt.rcParams.update({'font.size': 20})
 plt.rcParams['figure.figsize'] = [15, 15]  # width and height should be in inches, e.g., [10, 6]
@@ -97,7 +99,7 @@ simple_tweetyclr.first_time_analysis()
 
 
 total_dataset = TensorDataset(torch.tensor(simple_tweetyclr.stacked_windows.reshape(simple_tweetyclr.stacked_windows.shape[0], 1, 100, 151)))
-batch_size = 2
+batch_size = 36
 total_dataloader = DataLoader(total_dataset, batch_size=batch_size , shuffle=False)
 
 # list_of_images = []
@@ -156,7 +158,8 @@ class Encoder(nn.Module):
         self.bn9 = nn.BatchNorm2d(24)
         self.bn10 = nn.BatchNorm2d(16)
 
-        self.relu = nn.ReLU()
+        # self.relu = nn.ReLU()
+        self.relu = nn.LeakyReLU(0.01)
         
         self.fc = nn.Linear(320, 1)
 
@@ -199,11 +202,15 @@ class Encoder(nn.Module):
         x = self.relu(self.bn10(self.conv10(x)))
 
         x_flattened = x.view(-1, 320)
-        # x_flattened = x.view(1, -1)
-        # x = x.permute(0, x.shape[1]*x.shape[2]*x.shape[3])
-        x = self.relu(self.fc(x_flattened))
 
-        hamming_like_distance = torch.sum(torch.abs(x[0,:] - x[1,:]))
+        x = self.relu(self.fc(x_flattened))
+        
+        pairwise_differences = [torch.abs(obs2 - obs1) for obs1, obs2 in itertools.combinations(x, 2)]
+        pairwise_differences = torch.cat(pairwise_differences, dim = 0)
+
+        hamming_like_distance = torch.sum(pairwise_differences)
+
+        # hamming_like_distance = torch.sum(torch.abs(x[0,:] - x[1,:]))
         
         return hamming_like_distance
 
@@ -212,11 +219,16 @@ simple_tweetyclr.shuffling(295)
 # torch.manual_seed(295)
 shuffled_indices = simple_tweetyclr.shuffled_indices
 
+# stacked_windows = simple_tweetyclr.stacked_windows[shuffled_indices,:]
+stacked_windows = simple_tweetyclr.stacked_windows.copy()
+# labels = simple_tweetyclr.stacked_labels_for_window[shuffled_indices, :]
+labels = simple_tweetyclr.stacked_labels_for_window.copy()
+
 from torch.utils.data import random_split
 
-dataset = torch.tensor(simple_tweetyclr.stacked_windows.reshape(simple_tweetyclr.stacked_windows.shape[0], 1, 100, 151))
+dataset = torch.tensor(stacked_windows.reshape(stacked_windows.shape[0], 1, 100, 151))
 
-dataset = TensorDataset(dataset, torch.tensor(simple_tweetyclr.stacked_labels_for_window))
+dataset = TensorDataset(dataset, torch.tensor(labels))
 
 total_dataloader = DataLoader(dataset, batch_size=batch_size , shuffle=False)
 
@@ -231,8 +243,11 @@ train_dataset, test_dataset = random_split(dataset, [train_size, test_size])
 
 from torch.utils.data import DataLoader
 
-train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=False)
-test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+shuffle_status = False
+
+
+train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=shuffle_status)
+test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=shuffle_status)
 
 model = Encoder()
 optimizer = optim.Adam(model.parameters(), lr=0.01)
@@ -240,20 +255,10 @@ criterion = nn.MSELoss()  # MSE Loss
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 model.to(device)
-accumulation_steps = 1
+accumulation_steps = 2
 num_epochs = 500
 
 predictions = []
-
-# def check_relu_outputs(model, input_data):
-#     with torch.no_grad():
-#         for layer in model.children():
-#             if isinstance(layer, nn.ReLU):
-#                 output = layer(input_data)
-#                 num_total = output.nelement()
-#                 num_zeros = (output == 0).sum().item()
-#                 print(f"ReLU Layer: {layer}")
-#                 print(f"Percentage of zeros: {num_zeros / num_total * 100:.2f}%")
 
 epoch_loss_train = []
 epoch_loss_test = []
@@ -272,7 +277,10 @@ for epoch in range(num_epochs):
         pred_hamming = model(inputs)
         predictions.append(pred_hamming.item())
         
-        actual_hamming = (labels[0,:] != labels[1,:]).sum().to(torch.float32)
+        actual_hamming = [(obs2 != obs1).sum().unsqueeze(0) for obs1, obs2 in itertools.combinations(labels, 2)]
+        actual_hamming = torch.cat(actual_hamming, dim = 0)
+        actual_hamming = torch.sum(actual_hamming).to(torch.float32)
+        
         loss = criterion(pred_hamming, actual_hamming)
         
         # Scale the loss (if needed) and perform backward pass
@@ -285,17 +293,11 @@ for epoch in range(num_epochs):
         # Perform an optimization step after accumulating the specified number of gradients
         if (i + 1) % accumulation_steps == 0 or i + 1 == len(train_loader):
             optimizer.step()
-            # Optional: Print gradient norms for debugging
-            # for name, param in model.named_parameters():
-            #     if param.grad is not None:
-            #         print(f'Layer: {name}, Gradient Norm: {param.grad.norm()}')
-
             optimizer.zero_grad()  # Reset gradients after optimizer step
             
         batch_loss_train += loss.item()
-        # check_relu_outputs(model, inputs)
-
-        break
+        
+        # break
         
         
     # model.eval()
@@ -322,9 +324,9 @@ for epoch in range(num_epochs):
     #     break
         
     # Logging the loss averaged over an epoch
-    epoch_loss_train.append(batch_loss_train)
+    # epoch_loss_train.append(batch_loss_train)
     # epoch_loss_test.append(batch_loss_test)
-    # epoch_loss_train.append(batch_loss_train/len(train_loader))
+    epoch_loss_train.append(batch_loss_train/len(train_loader))
     # epoch_loss_test.append(batch_loss_test/len(test_loader))
     # epoch_loss.append(batch_loss / len(train_loader))
 
@@ -400,7 +402,8 @@ experiment_params = {
     "Train_Proportion": train_perc,
     "Criterion": str(criterion), 
     "Model_Architecture": model_arch_lines, 
-    "Forward_Method": forward_method_lines
+    "Forward_Method": forward_method_lines, 
+    "Dataloader_Shuffle": True
     }
 
 import json
