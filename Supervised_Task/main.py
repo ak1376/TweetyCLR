@@ -43,11 +43,20 @@ analysis_path = f'{filepath}/Dropbox (University of Oregon)/Kapoor_Ananya/01_Pro
 # analysis_path = '/home/akapoor/Dropbox (University of Oregon)/Kapoor_Ananya/01_Projects/01_b_Canary_SSL/TweetyCLR_Repo/'
 
 # # Parameters we set
-num_spec = 2
+num_spec = 10
 window_size = 100
 stride = 10
 
 # Define the folder name
+
+# I want to have a setting
+
+
+
+
+
+
+
 folder_name = f'{analysis_path}Supervised_Task/Num_Spectrograms_{num_spec}_Window_Size_{window_size}_Stride_{stride}'
 
 
@@ -160,6 +169,7 @@ embeddable_images = simple_tweetyclr.get_images(list_of_images)
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from torch.optim.lr_scheduler import StepLR
 
 class Encoder(nn.Module):
     def __init__(self):
@@ -186,8 +196,8 @@ class Encoder(nn.Module):
         self.bn9 = nn.BatchNorm2d(24)
         self.bn10 = nn.BatchNorm2d(16)
 
-        # self.relu = nn.ReLU()
-        self.relu = nn.LeakyReLU(0.01)
+        self.relu = nn.ReLU()
+        # self.relu = nn.LeakyReLU(0.01)
         
         self.fc = nn.Linear(320, 1)
 
@@ -204,7 +214,7 @@ class Encoder(nn.Module):
                 if m.bias is not None:
                     init.zeros_(m.bias)
 
-    def forward(self, x):
+    def forward_once(self, x):
 
         # x = F.relu((self.conv1(x)))
         # x = F.relu((self.conv2(x)))
@@ -233,67 +243,96 @@ class Encoder(nn.Module):
 
         x = self.relu(self.fc(x_flattened))
         
-        pairwise_differences = [torch.abs(obs2 - obs1) for obs1, obs2 in itertools.combinations(x, 2)]
-        pairwise_differences = torch.cat(pairwise_differences, dim = 0)
-
-        hamming_like_distance = torch.sum(pairwise_differences)
-
-        # hamming_like_distance = torch.sum(torch.abs(x[0,:] - x[1,:]))
+        return x
+    
+    def forward(self, input1, input2):
         
-        return hamming_like_distance
-
+        output1 = self.forward_once(input1)
+        output2 = self.forward_once(input2)
+        
+        return output1, output2
+    
+    def calculate_loss(self, input1, input2, output1, output2):
+        actual_loss = (input1 != input2).sum().unsqueeze(0).to(torch.float32)
+        predicted_loss = torch.abs(output1 - output2).sum().unsqueeze(0).to(torch.float32)
+        
+        return actual_loss, predicted_loss
+ 
 
 simple_tweetyclr.shuffling(295)
 # torch.manual_seed(295)
 shuffled_indices = simple_tweetyclr.shuffled_indices
 
-stacked_windows = simple_tweetyclr.stacked_windows[shuffled_indices,:]
-# stacked_windows = simple_tweetyclr.stacked_windows.copy()
-labels = simple_tweetyclr.stacked_labels_for_window[shuffled_indices, :]
-# labels = simple_tweetyclr.stacked_labels_for_window.copy()
+# stacked_windows = simple_tweetyclr.stacked_windows[shuffled_indices,:]
+stacked_windows = simple_tweetyclr.stacked_windows.copy()
+# labels = simple_tweetyclr.stacked_labels_for_window[shuffled_indices, :]
+labels = simple_tweetyclr.stacked_labels_for_window.copy()
 
-from torch.utils.data import random_split
+# =============================================================================
+# Dataset curation for Siamese Network
+# =============================================================================
+
+# I want to create pairs of data observations from a dataset. 
+from torch.utils.data import Dataset
+
+class SiameseDataset(Dataset):
+    def __init__(self, data):
+        self.data = data
+
+    def __getitem__(self, index):
+        # Select the first item of the pair
+        x1 = self.data[index]
+
+        # Randomly select the second item of the pair
+        idx2 = random.randint(0, len(self.data) - 1)
+        x2 = self.data[idx2]
+
+        return x1, x2
+
+    def __len__(self):
+        return len(self.data)
 
 dataset = torch.tensor(stacked_windows.reshape(stacked_windows.shape[0], 1, 100, 151))
 
 dataset = TensorDataset(dataset, torch.tensor(labels))
 
-total_dataloader = DataLoader(dataset, batch_size=batch_size , shuffle=False)
-
+siamese_dataset = SiameseDataset(dataset)
+# a = next(iter(siamese_dataset))
+# len(a) = 2, where the first dimension is a tuple of the spectrogram slices and the second dimension is a tuple of the ground truth labels
 
 # Define the split sizes
 train_perc = 0.8
 train_size = int(train_perc * len(dataset))  # 80% for training
 test_size = len(dataset) - train_size  # 20% for testing
+from torch.utils.data import random_split
 
 # Split the dataset
-train_dataset, test_dataset = random_split(dataset, [train_size, test_size])
-
-from torch.utils.data import DataLoader
+train_dataset, test_dataset = random_split(siamese_dataset, [train_size, test_size])
 
 shuffle_status = True
-
 
 train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=shuffle_status)
 test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=shuffle_status)
 
+# =============================================================================
+# Model Training
+# =============================================================================
+
 model = Encoder()
-optimizer = optim.Adam(model.parameters(), lr=0.01)
-criterion = nn.MSELoss()  # MSE Loss
+optimizer = optim.Adam(model.parameters(), lr=0.001)
+# criterion = nn.MSELoss()  # MSE Loss
+criterion = nn.L1Loss()
+scheduler = StepLR(optimizer, step_size=30, gamma=0.1)
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 model.to(device)
-accumulation_steps = 1
 num_epochs = 500
-
-# Placeholder for your logging mechanism
-# Replace `logger.add_scalar` with however you log your statistics, e.g., TensorBoard, a file, etc.
-
-global_step = 0  # to keep track of the number of updates
 
 predictions = []
 epoch_loss_train = []
 epoch_loss_test = []
+predicted_vals = []
+actual_vals = []
 # Open a file in write mode ('w') or append mode ('a') as needed
 with open('training_log.txt', 'w') as log_file:
     for epoch in range(num_epochs):
@@ -301,44 +340,54 @@ with open('training_log.txt', 'w') as log_file:
         batch_loss_train = 0
         batch_loss_test = 0
         
-        for i, (inputs, labels) in enumerate(train_loader):
+        for data in train_loader:
             # Transfer inputs and labels to the GPU
-            inputs = inputs.to(device, dtype=torch.float32)
-            labels = labels.to(device, dtype=torch.float32)
+            x1, x2 = data
             
-            pred_hamming = model(inputs)
-            predictions.append(pred_hamming.item())
+            input1, label1 = x1[0], x1[1]
+            input2, label2 = x2[0], x2[1]
             
-            actual_hamming = [(obs2 != obs1).sum().unsqueeze(0) for obs1, obs2 in itertools.combinations(labels, 2)]
-            actual_hamming = torch.cat(actual_hamming, dim = 0)
-            actual_hamming = torch.sum(actual_hamming).to(torch.float32)
+            input1 = input1.to(device, dtype = torch.float32)
+            label1 = label1.to(device, dtype = torch.float32)
             
-            loss = criterion(pred_hamming, actual_hamming)
+            input2 = input2.to(device, dtype = torch.float32)
+            label2 = label2.to(device, dtype = torch.float32)
+            
+            optimizer.zero_grad()
+            output1, output2 = model(input1, input2)
+            
+            actual_loss, predicted_loss = model.calculate_loss(label1, label2, output1, output2)
+            predicted_vals.append(predicted_loss.item())
+            actual_vals.append(actual_loss.item())
+            
+            loss = criterion(predicted_loss, actual_loss)
             batch_loss_train += loss.item()
             optimizer.zero_grad()
             loss.backward()
+            # torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+
             optimizer.step()
             
             # Calculate the total gradient norm
-            total_grad_norm = 0.0
-            for p in model.parameters():
-                param_norm = p.grad.data.norm(2)
-                total_grad_norm += param_norm.item() ** 2
-            total_grad_norm = total_grad_norm ** (1. / 2)
+            # total_grad_norm = 0.0
+            # for p in model.parameters():
+            #     param_norm = p.grad.data.norm(2)
+            #     total_grad_norm += param_norm.item() ** 2
+            # total_grad_norm = total_grad_norm ** (1. / 2)
             
-            # Log or print the gradient norm
-            # print(f"Epoch {epoch}, Gradient Norm: {total_grad_norm}")
+            # # Log or print the gradient norm
+            # # print(f"Epoch {epoch}, Gradient Norm: {total_grad_norm}")
 
             
-            # Log statistics
-            input_mean, input_var = inputs.mean(), inputs.var()
-            output_mean, output_var = pred_hamming.detach().mean(), pred_hamming.detach().var()
-            # Write statistics to file
-            log_file.write(f'Epoch {epoch}, Batch {i}, '
-                            f'Input Mean: {input_mean}, Input Variance: {input_var}, '
-                            f'Output Mean: {output_mean}, Output Variance: {output_var}, '
-                            f'Total Gradient Norm: {total_grad_norm}, '
-                            f'Loss: {loss.item()}\n')
+            # # Log statistics
+            # input_mean, input_var = inputs.mean(), inputs.var()
+            # output_mean, output_var = pred_hamming.detach().mean(), pred_hamming.detach().var()
+            # # Write statistics to file
+            # log_file.write(f'Epoch {epoch}, Batch {i}, '
+            #                 f'Input Mean: {input_mean}, Input Variance: {input_var}, '
+            #                 f'Output Mean: {output_mean}, Output Variance: {output_var}, '
+            #                 f'Total Gradient Norm: {total_grad_norm}, '
+            #                 f'Loss: {loss.item()}\n')
             
             # Optionally flush the file to write data to disk immediately
             log_file.flush()
@@ -379,6 +428,8 @@ with open('training_log.txt', 'w') as log_file:
         #         grad_norm = parameter.grad.norm()
         #         print(f"Gradient norm of {name}: {grad_norm}")
     
+        # Step the scheduler at the end of the epoch
+        # scheduler.step()
         epoch_loss_train.append(batch_loss_train/len(train_loader))
         # epoch_loss_test.append(batch_loss_test/len(test_loader))
         # epoch_loss.append(batch_loss / len(train_loader))
