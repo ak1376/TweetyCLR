@@ -11,10 +11,10 @@ UMAP analysis of canary song spectrogram slices. Instead of doing a UMAP analysi
 import numpy as np
 import torch
 import sys
-filepath = '/Users/AnanyaKapoor'
+filepath = '/home/akapoor'
 import os
 # os.chdir('/Users/AnanyaKapoor/Downloads/TweetyCLR')
-os.chdir('/Users/AnanyaKapoor/Dropbox (University of Oregon)/Kapoor_Ananya/01_Projects/01_b_Canary_SSL/TweetyCLR_End_to_End')
+os.chdir('/home/akapoor/Dropbox (University of Oregon)/Kapoor_Ananya/01_Projects/01_b_Canary_SSL/TweetyCLR_End_to_End')
 from util import Tweetyclr
 import torch.nn as nn
 import torch.nn.functional as F
@@ -43,7 +43,7 @@ analysis_path = f'{filepath}/Dropbox (University of Oregon)/Kapoor_Ananya/01_Pro
 # analysis_path = '/home/akapoor/Dropbox (University of Oregon)/Kapoor_Ananya/01_Projects/01_b_Canary_SSL/TweetyCLR_Repo/'
 
 # # Parameters we set
-num_spec = 1
+num_spec = 2
 window_size = 100
 stride = 10
 
@@ -78,12 +78,40 @@ simple_tweetyclr.first_time_analysis()
 # I want to replace the power values in each spectrogram with the associated
 # label for that point in time. 
 
-# stacked_windows = simple_tweetyclr.stacked_windows.copy()
-# stacked_windows.shape = (stacked_windows.shape[0], 100, 151)
+stacked_windows = simple_tweetyclr.stacked_windows.copy()
+stacked_windows.shape = (stacked_windows.shape[0], 100, 151)
 
-# stacked_windows[:, :, :] = simple_tweetyclr.stacked_labels_for_window[:, :, None]
+stacked_windows[:, :, :] = simple_tweetyclr.stacked_labels_for_window[:, :, None]
 
-# stacked_windows.shape = (stacked_windows.shape[0], 100*151) 
+stacked_windows.shape = (stacked_windows.shape[0], 100*151) 
+
+# I want to use the Edit distance for UMAP decomposition. Need to write a custom function
+
+import numpy as np
+import numba
+@numba.njit()
+def custom_distance(x, y):
+    """
+    Calculate the custom distance metric equivalent to (labels[0,:] != labels[1,:]).sum() in PyTorch.
+
+    Parameters:
+    x, y (numpy arrays): Two label vectors to compare.
+
+    Returns:
+    float: The calculated distance.
+    """
+    # Ensure the inputs are NumPy arrays
+    x = np.asarray(x)
+    y = np.asarray(y)
+
+    # Calculate the number of different elements (equivalent to the original PyTorch expression)
+    distance = np.sum(x != y)
+
+    return float(distance)
+
+reducer = umap.UMAP(metric = custom_distance, random_state = 295)
+
+embed = reducer.fit_transform(stacked_windows)
 
 # np.save('/Users/AnanyaKapoor/Downloads/stacked_windows_analysis.npy', stacked_windows)
 # np.save('/Users/AnanyaKapoor/Downloads/mean_cols_analysis.npy', simple_tweetyclr.mean_colors_per_minispec)
@@ -99,19 +127,19 @@ simple_tweetyclr.first_time_analysis()
 
 
 total_dataset = TensorDataset(torch.tensor(simple_tweetyclr.stacked_windows.reshape(simple_tweetyclr.stacked_windows.shape[0], 1, 100, 151)))
-batch_size = 36
+batch_size = 128
 total_dataloader = DataLoader(total_dataset, batch_size=batch_size , shuffle=False)
 
-# list_of_images = []
-# for batch_idx, (data) in enumerate(total_dataloader):
-#     data = data[0]
+list_of_images = []
+for batch_idx, (data) in enumerate(total_dataloader):
+    data = data[0]
 
-#     for image in data:
-#         list_of_images.append(image)
+    for image in data:
+        list_of_images.append(image)
 
-# list_of_images = [tensor.numpy() for tensor in list_of_images]
+list_of_images = [tensor.numpy() for tensor in list_of_images]
 
-# embeddable_images = simple_tweetyclr.get_images(list_of_images)
+embeddable_images = simple_tweetyclr.get_images(list_of_images)
 
 # simple_tweetyclr.plot_UMAP_embedding(embed, simple_tweetyclr.mean_colors_per_minispec, embeddable_images, f'{simple_tweetyclr.folder_name}/Plots/UMAP_of_specs_with_labels.html', saveflag = True)
 
@@ -219,10 +247,10 @@ simple_tweetyclr.shuffling(295)
 # torch.manual_seed(295)
 shuffled_indices = simple_tweetyclr.shuffled_indices
 
-# stacked_windows = simple_tweetyclr.stacked_windows[shuffled_indices,:]
-stacked_windows = simple_tweetyclr.stacked_windows.copy()
-# labels = simple_tweetyclr.stacked_labels_for_window[shuffled_indices, :]
-labels = simple_tweetyclr.stacked_labels_for_window.copy()
+stacked_windows = simple_tweetyclr.stacked_windows[shuffled_indices,:]
+# stacked_windows = simple_tweetyclr.stacked_windows.copy()
+labels = simple_tweetyclr.stacked_labels_for_window[shuffled_indices, :]
+# labels = simple_tweetyclr.stacked_labels_for_window.copy()
 
 from torch.utils.data import random_split
 
@@ -243,7 +271,7 @@ train_dataset, test_dataset = random_split(dataset, [train_size, test_size])
 
 from torch.utils.data import DataLoader
 
-shuffle_status = False
+shuffle_status = True
 
 
 train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=shuffle_status)
@@ -255,97 +283,122 @@ criterion = nn.MSELoss()  # MSE Loss
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 model.to(device)
-accumulation_steps = 2
+accumulation_steps = 1
 num_epochs = 500
 
-predictions = []
+# Placeholder for your logging mechanism
+# Replace `logger.add_scalar` with however you log your statistics, e.g., TensorBoard, a file, etc.
 
+global_step = 0  # to keep track of the number of updates
+
+predictions = []
 epoch_loss_train = []
 epoch_loss_test = []
-for epoch in range(num_epochs):
-    model.train()  # Set model to training mode
-    batch_loss_train = 0
-    batch_loss_test = 0
-    # Initialize gradient accumulation
-    optimizer.zero_grad()
-    
-    for i, (inputs, labels) in enumerate(train_loader):
-        # Transfer inputs and labels to the GPU
-        inputs = inputs.to(device, dtype=torch.float32)
-        labels = labels.to(device, dtype=torch.float32)
+# Open a file in write mode ('w') or append mode ('a') as needed
+with open('training_log.txt', 'w') as log_file:
+    for epoch in range(num_epochs):
+        model.train()  # Set model to training mode
+        batch_loss_train = 0
+        batch_loss_test = 0
         
-        pred_hamming = model(inputs)
-        predictions.append(pred_hamming.item())
-        
-        actual_hamming = [(obs2 != obs1).sum().unsqueeze(0) for obs1, obs2 in itertools.combinations(labels, 2)]
-        actual_hamming = torch.cat(actual_hamming, dim = 0)
-        actual_hamming = torch.sum(actual_hamming).to(torch.float32)
-        
-        loss = criterion(pred_hamming, actual_hamming)
-        
-        # Scale the loss (if needed) and perform backward pass
-        # Note: You scale the loss if the batch size is effectively being increased by accumulation
-        scaled_loss = loss / accumulation_steps
-        scaled_loss.backward()
-
-        batch_loss_train += loss.item()
-
-        # Perform an optimization step after accumulating the specified number of gradients
-        if (i + 1) % accumulation_steps == 0 or i + 1 == len(train_loader):
-            optimizer.step()
-            optimizer.zero_grad()  # Reset gradients after optimizer step
+        for i, (inputs, labels) in enumerate(train_loader):
+            # Transfer inputs and labels to the GPU
+            inputs = inputs.to(device, dtype=torch.float32)
+            labels = labels.to(device, dtype=torch.float32)
             
-        batch_loss_train += loss.item()
-        
-        # break
-        
-        
-    # model.eval()
-        
-    # for i, (inputs, labels) in enumerate(test_loader):
-    #     inputs = inputs.to(device, dtype=torch.float32)
-    #     labels = labels.to(device, dtype=torch.float32)
-        
-    #     pred_hamming = model(inputs)
-        
-    #     actual_hamming = [(obs2 != obs1).sum().unsqueeze(0) for obs1, obs2 in itertools.combinations(labels, 2)]
-    #     actual_hamming = torch.cat(actual_hamming, dim = 0)/100
-    #     actual_hamming = torch.sum(actual_hamming).to(torch.float32)
-        
-    #     # actual_hamming = (labels[0,:] != labels[1,:]).sum().to(torch.float32)
-    #     # actual_hamming = actual_hamming.view(1, 1)
-    #     loss = criterion(pred_hamming, actual_hamming)
-        
-    #     # Scales the loss, and calls backward() to accumulate gradients
-    #     loss = loss / accumulation_steps
-        
-    #     batch_loss_test += loss.item()
-        
-    #     break
-        
-    # Logging the loss averaged over an epoch
-    # epoch_loss_train.append(batch_loss_train)
-    # epoch_loss_test.append(batch_loss_test)
-    epoch_loss_train.append(batch_loss_train/len(train_loader))
-    # epoch_loss_test.append(batch_loss_test/len(test_loader))
-    # epoch_loss.append(batch_loss / len(train_loader))
+            pred_hamming = model(inputs)
+            predictions.append(pred_hamming.item())
+            
+            actual_hamming = [(obs2 != obs1).sum().unsqueeze(0) for obs1, obs2 in itertools.combinations(labels, 2)]
+            actual_hamming = torch.cat(actual_hamming, dim = 0)
+            actual_hamming = torch.sum(actual_hamming).to(torch.float32)
+            
+            loss = criterion(pred_hamming, actual_hamming)
+            batch_loss_train += loss.item()
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            
+            # Calculate the total gradient norm
+            total_grad_norm = 0.0
+            for p in model.parameters():
+                param_norm = p.grad.data.norm(2)
+                total_grad_norm += param_norm.item() ** 2
+            total_grad_norm = total_grad_norm ** (1. / 2)
+            
+            # Log or print the gradient norm
+            # print(f"Epoch {epoch}, Gradient Norm: {total_grad_norm}")
 
-    # print(f'Epoch [{epoch+1}/{num_epochs}], Train Loss: {epoch_loss_train[-1]:.4f}, Test Loss: {epoch_loss_test[-1]:.4f}')
-    print(f'Epoch [{epoch+1}/{num_epochs}], Train Loss: {epoch_loss_train[-1]:.4f}')
-
-
-epoch_loss_train_arr = np.array(epoch_loss_train)
-# epoch_loss_test_arr = np.array(epoch_loss_test)
-
-plt.figure()
-plt.plot(np.log(epoch_loss_train_arr + 1e-5), label = 'Train Loss')
-# plt.plot(np.log(epoch_loss_test_arr + 1e-5), label = 'Validation Loss')
-plt.axhline(np.log(1e-5), color = 'red', linestyle = '--', label = 'Lowest Possible Loss')
-plt.legend()
-plt.title("Loss Curve")
-plt.xlabel("Epoch")
-plt.ylabel("log(loss + 1e-5)")
-plt.show()
+            
+            # Log statistics
+            input_mean, input_var = inputs.mean(), inputs.var()
+            output_mean, output_var = pred_hamming.detach().mean(), pred_hamming.detach().var()
+            # Write statistics to file
+            log_file.write(f'Epoch {epoch}, Batch {i}, '
+                            f'Input Mean: {input_mean}, Input Variance: {input_var}, '
+                            f'Output Mean: {output_mean}, Output Variance: {output_var}, '
+                            f'Total Gradient Norm: {total_grad_norm}, '
+                            f'Loss: {loss.item()}\n')
+            
+            # Optionally flush the file to write data to disk immediately
+            log_file.flush()
+            
+            # break
+            
+            
+        # model.eval()
+            
+        # for i, (inputs, labels) in enumerate(test_loader):
+        #     inputs = inputs.to(device, dtype=torch.float32)
+        #     labels = labels.to(device, dtype=torch.float32)
+            
+        #     pred_hamming = model(inputs)
+            
+        #     actual_hamming = [(obs2 != obs1).sum().unsqueeze(0) for obs1, obs2 in itertools.combinations(labels, 2)]
+        #     actual_hamming = torch.cat(actual_hamming, dim = 0)/100
+        #     actual_hamming = torch.sum(actual_hamming).to(torch.float32)
+            
+        #     # actual_hamming = (labels[0,:] != labels[1,:]).sum().to(torch.float32)
+        #     # actual_hamming = actual_hamming.view(1, 1)
+        #     loss = criterion(pred_hamming, actual_hamming)
+            
+        #     # Scales the loss, and calls backward() to accumulate gradients
+        #     loss = loss / accumulation_steps
+            
+        #     batch_loss_test += loss.item()
+            
+        #     break
+            
+        # Logging the loss averaged over an epoch
+        # epoch_loss_train.append(batch_loss_train)
+        # epoch_loss_test.append(batch_loss_test)
+        
+        # Assuming 'model' is your neural network model
+        # for name, parameter in model.named_parameters():
+        #     if parameter.grad is not None:
+        #         grad_norm = parameter.grad.norm()
+        #         print(f"Gradient norm of {name}: {grad_norm}")
+    
+        epoch_loss_train.append(batch_loss_train/len(train_loader))
+        # epoch_loss_test.append(batch_loss_test/len(test_loader))
+        # epoch_loss.append(batch_loss / len(train_loader))
+    
+        # print(f'Epoch [{epoch+1}/{num_epochs}], Train Loss: {epoch_loss_train[-1]:.4f}, Test Loss: {epoch_loss_test[-1]:.4f}')
+        print(f'Epoch [{epoch+1}/{num_epochs}], Train Loss: {epoch_loss_train[-1]:.4f}')
+    
+    
+    epoch_loss_train_arr = np.array(epoch_loss_train)
+    # epoch_loss_test_arr = np.array(epoch_loss_test)
+    
+    plt.figure()
+    plt.plot(np.log(epoch_loss_train_arr + 1e-5), label = 'Train Loss')
+    # plt.plot(np.log(epoch_loss_test_arr + 1e-5), label = 'Validation Loss')
+    plt.axhline(np.log(1e-5), color = 'red', linestyle = '--', label = 'Lowest Possible Loss')
+    plt.legend()
+    plt.title("Loss Curve")
+    plt.xlabel("Epoch")
+    plt.ylabel("log(loss + 1e-5)")
+    plt.show()
 
 # Let's save the parameters from this experiment (this will go in the utils
 # file later)
