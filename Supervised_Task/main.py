@@ -49,15 +49,17 @@ stride = 10
 
 # Define the folder name
 
-# I want to have a setting
+# I want to have a setting where the user is asked whether they want to log an
+# experiment. The user should also provide a brief text description of what the
+# experiment is testing (like a Readme file)
 
-
-
-
-
-
-
-folder_name = f'{analysis_path}Supervised_Task/Num_Spectrograms_{num_spec}_Window_Size_{window_size}_Stride_{stride}'
+log_experiment = True
+if log_experiment == True:
+    user_input = input("Please enter the experiment name: ")
+    folder_name = f'{analysis_path}Supervised_Task/Num_Spectrograms_{num_spec}_Window_Size_{window_size}_Stride_{stride}/{user_input}'
+    
+else:
+    folder_name = f'{analysis_path}Supervised_Task/Num_Spectrograms_{num_spec}_Window_Size_{window_size}_Stride_{stride}'
 
 
 files = os.listdir(directory)
@@ -66,7 +68,6 @@ all_songs_data.sort()
 
 masking_freq_tuple = (500, 7000)
 spec_dim_tuple = (window_size, 151)
-
 
 with open(f'{filepath}/Dropbox (University of Oregon)/Kapoor_Ananya/01_Projects/01_b_Canary_SSL/Canary_SSL_Repo/InfoNCE_Num_Spectrograms_100_Window_Size_100_Stride_10/category_colors.pkl', 'rb') as file:
     category_colors = pickle.load(file)
@@ -81,6 +82,12 @@ simple_tweetyclr_experiment_1 = Tweetyclr(num_spec, window_size, stride, folder_
 # simple_tweetyclr_experiment_1.temperature_value = temp_value
 simple_tweetyclr = simple_tweetyclr_experiment_1
 simple_tweetyclr.first_time_analysis()
+
+if log_experiment == True: 
+    exp_descp = input('Please give a couple of sentences describing what the experiment is testing: ')
+    # Save the input to a text file
+    with open(f'{folder_name}/experiment_readme.txt', 'w') as file:
+        file.write(exp_descp)
 
 # In[2]: UMAP on spectrogram labels.
 
@@ -120,7 +127,7 @@ def custom_distance(x, y):
 
 reducer = umap.UMAP(metric = custom_distance, random_state = 295)
 
-embed = reducer.fit_transform(stacked_windows)
+# embed = reducer.fit_transform(stacked_windows)
 
 # np.save('/Users/AnanyaKapoor/Downloads/stacked_windows_analysis.npy', stacked_windows)
 # np.save('/Users/AnanyaKapoor/Downloads/mean_cols_analysis.npy', simple_tweetyclr.mean_colors_per_minispec)
@@ -136,7 +143,7 @@ embed = reducer.fit_transform(stacked_windows)
 
 
 total_dataset = TensorDataset(torch.tensor(simple_tweetyclr.stacked_windows.reshape(simple_tweetyclr.stacked_windows.shape[0], 1, 100, 151)))
-batch_size = 128
+batch_size = 256
 total_dataloader = DataLoader(total_dataset, batch_size=batch_size , shuffle=False)
 
 list_of_images = []
@@ -169,7 +176,7 @@ embeddable_images = simple_tweetyclr.get_images(list_of_images)
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.optim.lr_scheduler import StepLR
+from torch.optim.lr_scheduler import StepLR, ReduceLROnPlateau
 
 class Encoder(nn.Module):
     def __init__(self):
@@ -263,10 +270,10 @@ simple_tweetyclr.shuffling(295)
 # torch.manual_seed(295)
 shuffled_indices = simple_tweetyclr.shuffled_indices
 
-# stacked_windows = simple_tweetyclr.stacked_windows[shuffled_indices,:]
-stacked_windows = simple_tweetyclr.stacked_windows.copy()
-# labels = simple_tweetyclr.stacked_labels_for_window[shuffled_indices, :]
-labels = simple_tweetyclr.stacked_labels_for_window.copy()
+stacked_windows = simple_tweetyclr.stacked_windows[shuffled_indices,:]
+# stacked_windows = simple_tweetyclr.stacked_windows.copy()
+labels = simple_tweetyclr.stacked_labels_for_window[shuffled_indices, :]
+# labels = simple_tweetyclr.stacked_labels_for_window.copy()
 
 # =============================================================================
 # Dataset curation for Siamese Network
@@ -276,10 +283,12 @@ labels = simple_tweetyclr.stacked_labels_for_window.copy()
 from torch.utils.data import Dataset
 
 class SiameseDataset(Dataset):
-    def __init__(self, data):
+    def __init__(self, data, seed = 295):
         self.data = data
+        self.seed = seed
 
     def __getitem__(self, index):
+        random.seed(index)
         # Select the first item of the pair
         x1 = self.data[index]
 
@@ -319,137 +328,144 @@ test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=shuffle_st
 # =============================================================================
 
 model = Encoder()
-optimizer = optim.Adam(model.parameters(), lr=0.001)
-# criterion = nn.MSELoss()  # MSE Loss
-criterion = nn.L1Loss()
-scheduler = StepLR(optimizer, step_size=30, gamma=0.1)
+optimizer = optim.Adam(model.parameters(), lr=1e-4)
+criterion = nn.MSELoss()  # MSE Loss
+# criterion = nn.L1Loss()
+# scheduler = StepLR(optimizer, step_size=30, gamma=0.1)
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 model.to(device)
 num_epochs = 500
+# scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.05, patience=50, verbose=True)
 
 predictions = []
 epoch_loss_train = []
 epoch_loss_test = []
 predicted_vals = []
 actual_vals = []
-# Open a file in write mode ('w') or append mode ('a') as needed
-with open('training_log.txt', 'w') as log_file:
-    for epoch in range(num_epochs):
-        model.train()  # Set model to training mode
-        batch_loss_train = 0
-        batch_loss_test = 0
+for epoch in range(num_epochs):
+    model.train()  # Set model to training mode
+    batch_loss_train = 0
+    batch_loss_test = 0
+    
+    for data in train_loader:
+    # data = next(iter(train_loader))
+    # for i in np.arange(1):
+        # Transfer inputs and labels to the GPU
+        x1, x2 = data
         
-        for data in train_loader:
-            # Transfer inputs and labels to the GPU
-            x1, x2 = data
-            
-            input1, label1 = x1[0], x1[1]
-            input2, label2 = x2[0], x2[1]
-            
-            input1 = input1.to(device, dtype = torch.float32)
-            label1 = label1.to(device, dtype = torch.float32)
-            
-            input2 = input2.to(device, dtype = torch.float32)
-            label2 = label2.to(device, dtype = torch.float32)
-            
-            optimizer.zero_grad()
-            output1, output2 = model(input1, input2)
-            
-            actual_loss, predicted_loss = model.calculate_loss(label1, label2, output1, output2)
-            predicted_vals.append(predicted_loss.item())
-            actual_vals.append(actual_loss.item())
-            
-            loss = criterion(predicted_loss, actual_loss)
-            batch_loss_train += loss.item()
-            optimizer.zero_grad()
-            loss.backward()
-            # torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-
-            optimizer.step()
-            
-            # Calculate the total gradient norm
-            # total_grad_norm = 0.0
-            # for p in model.parameters():
-            #     param_norm = p.grad.data.norm(2)
-            #     total_grad_norm += param_norm.item() ** 2
-            # total_grad_norm = total_grad_norm ** (1. / 2)
-            
-            # # Log or print the gradient norm
-            # # print(f"Epoch {epoch}, Gradient Norm: {total_grad_norm}")
-
-            
-            # # Log statistics
-            # input_mean, input_var = inputs.mean(), inputs.var()
-            # output_mean, output_var = pred_hamming.detach().mean(), pred_hamming.detach().var()
-            # # Write statistics to file
-            # log_file.write(f'Epoch {epoch}, Batch {i}, '
-            #                 f'Input Mean: {input_mean}, Input Variance: {input_var}, '
-            #                 f'Output Mean: {output_mean}, Output Variance: {output_var}, '
-            #                 f'Total Gradient Norm: {total_grad_norm}, '
-            #                 f'Loss: {loss.item()}\n')
-            
-            # Optionally flush the file to write data to disk immediately
-            log_file.flush()
-            
-            # break
-            
-            
-        # model.eval()
-            
-        # for i, (inputs, labels) in enumerate(test_loader):
-        #     inputs = inputs.to(device, dtype=torch.float32)
-        #     labels = labels.to(device, dtype=torch.float32)
-            
-        #     pred_hamming = model(inputs)
-            
-        #     actual_hamming = [(obs2 != obs1).sum().unsqueeze(0) for obs1, obs2 in itertools.combinations(labels, 2)]
-        #     actual_hamming = torch.cat(actual_hamming, dim = 0)/100
-        #     actual_hamming = torch.sum(actual_hamming).to(torch.float32)
-            
-        #     # actual_hamming = (labels[0,:] != labels[1,:]).sum().to(torch.float32)
-        #     # actual_hamming = actual_hamming.view(1, 1)
-        #     loss = criterion(pred_hamming, actual_hamming)
-            
-        #     # Scales the loss, and calls backward() to accumulate gradients
-        #     loss = loss / accumulation_steps
-            
-        #     batch_loss_test += loss.item()
-            
-        #     break
-            
-        # Logging the loss averaged over an epoch
-        # epoch_loss_train.append(batch_loss_train)
-        # epoch_loss_test.append(batch_loss_test)
+        input1, label1 = x1[0], x1[1]
+        input2, label2 = x2[0], x2[1]
         
-        # Assuming 'model' is your neural network model
-        # for name, parameter in model.named_parameters():
-        #     if parameter.grad is not None:
-        #         grad_norm = parameter.grad.norm()
-        #         print(f"Gradient norm of {name}: {grad_norm}")
+        input1 = input1.to(device, dtype = torch.float32)
+        label1 = label1.to(device, dtype = torch.float32)
+        
+        input2 = input2.to(device, dtype = torch.float32)
+        label2 = label2.to(device, dtype = torch.float32)
+        
+        optimizer.zero_grad()
+        output1, output2 = model(input1, input2)
+        
+        actual_loss, predicted_loss = model.calculate_loss(label1, label2, output1, output2)
+        predicted_vals.append(predicted_loss.item())
+        actual_vals.append(actual_loss.item())
+        
+        train_loss = criterion(predicted_loss, actual_loss)
+        batch_loss_train += train_loss.item()
+        optimizer.zero_grad()
+        train_loss.backward()
+        
+        # After calling loss.backward(), but before optimizer.step()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)  # or another threshold value
+        # if epoch >300:
+        #     for name, param in model.named_parameters():
+        #         if param.grad is not None:
+        #             grad_mean = torch.mean(param.grad)
+        #             grad_max = torch.max(param.grad)
+        #             print(f"{name} - grad mean: {grad_mean}, grad max: {grad_max}")
+                
+        optimizer.step()
+
+    model.eval()
+        
+    for data in test_loader:
+        
+        x1, x2 = data
+        
+        input1, label1 = x1[0], x1[1]
+        input2, label2 = x2[0], x2[1]
+        
+        input1 = input1.to(device, dtype = torch.float32)
+        label1 = label1.to(device, dtype = torch.float32)
+        
+        input2 = input2.to(device, dtype = torch.float32)
+        label2 = label2.to(device, dtype = torch.float32)
+        
+        output1, output2 = model(input1, input2)
+        
+        actual_loss, predicted_loss = model.calculate_loss(label1, label2, output1, output2)
+        # predicted_vals.append(predicted_loss.item())
+        # actual_vals.append(actual_loss.item())
+        
+        loss = criterion(predicted_loss, actual_loss)
+        batch_loss_test += loss.item()
     
-        # Step the scheduler at the end of the epoch
-        # scheduler.step()
-        epoch_loss_train.append(batch_loss_train/len(train_loader))
-        # epoch_loss_test.append(batch_loss_test/len(test_loader))
-        # epoch_loss.append(batch_loss / len(train_loader))
+    # for i, (inputs, labels) in enumerate(test_loader):
+    #     inputs = inputs.to(device, dtype=torch.float32)
+    #     labels = labels.to(device, dtype=torch.float32)
+        
+    #     pred_hamming = model(inputs)
+        
+    #     actual_hamming = [(obs2 != obs1).sum().unsqueeze(0) for obs1, obs2 in itertools.combinations(labels, 2)]
+    #     actual_hamming = torch.cat(actual_hamming, dim = 0)/100
+    #     actual_hamming = torch.sum(actual_hamming).to(torch.float32)
+        
+    #     # actual_hamming = (labels[0,:] != labels[1,:]).sum().to(torch.float32)
+    #     # actual_hamming = actual_hamming.view(1, 1)
+    #     loss = criterion(pred_hamming, actual_hamming)
+        
+    #     # Scales the loss, and calls backward() to accumulate gradients
+    #     loss = loss / accumulation_steps
+        
+    #     batch_loss_test += loss.item()
+        
+    #     break
+        
+    # Logging the loss averaged over an epoch
+    epoch_loss_train.append(batch_loss_train)
+    epoch_loss_test.append(batch_loss_test)
+    # Step the scheduler based on validation loss
+    # scheduler.step(train_loss)
     
-        # print(f'Epoch [{epoch+1}/{num_epochs}], Train Loss: {epoch_loss_train[-1]:.4f}, Test Loss: {epoch_loss_test[-1]:.4f}')
-        print(f'Epoch [{epoch+1}/{num_epochs}], Train Loss: {epoch_loss_train[-1]:.4f}')
+    # Assuming 'model' is your neural network model
+    # for name, parameter in model.named_parameters():
+    #     if parameter.grad is not None:
+    #         grad_norm = parameter.grad.norm()
+    #         print(f"Gradient norm of {name}: {grad_norm}")
     
+    # Step the scheduler at the end of the epoch
+    # scheduler.step()
+    # epoch_loss_train.append(batch_loss_train/len(train_loader))
+    # epoch_loss_test.append(batch_loss_test/len(test_loader))
+    # epoch_loss.append(batch_loss / len(train_loader))
     
-    epoch_loss_train_arr = np.array(epoch_loss_train)
-    # epoch_loss_test_arr = np.array(epoch_loss_test)
+    # print(f'Epoch [{epoch+1}/{num_epochs}], Train Loss: {epoch_loss_train[-1]:.4f}, Test Loss: {epoch_loss_test[-1]:.4f}')
+    print(f'Ep1och [{epoch+1}/{num_epochs}], Train Loss: {epoch_loss_train[-1]:.4f}')
     
-    plt.figure()
-    plt.plot(np.log(epoch_loss_train_arr + 1e-5), label = 'Train Loss')
-    # plt.plot(np.log(epoch_loss_test_arr + 1e-5), label = 'Validation Loss')
-    plt.axhline(np.log(1e-5), color = 'red', linestyle = '--', label = 'Lowest Possible Loss')
-    plt.legend()
-    plt.title("Loss Curve")
-    plt.xlabel("Epoch")
-    plt.ylabel("log(loss + 1e-5)")
-    plt.show()
+
+epoch_loss_train_arr = np.array(epoch_loss_train)
+epoch_loss_test_arr = np.array(epoch_loss_test)
+
+plt.figure()
+plt.plot(np.log(epoch_loss_train_arr + 1e-5), label = 'Train Loss')
+plt.plot(np.log(epoch_loss_test_arr + 1e-5), label = 'Validation Loss')
+plt.axhline(np.log(1e-5), color = 'red', linestyle = '--', label = 'Lowest Possible Loss')
+plt.legend()
+plt.title("Loss Curve")
+plt.xlabel("Epoch")
+plt.ylabel("log(loss + 1e-5)")
+plt.savefig(f'{folder_name}/loss_curve.png')
+plt.show()
 
 # Let's save the parameters from this experiment (this will go in the utils
 # file later)
