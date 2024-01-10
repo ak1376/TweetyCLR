@@ -43,7 +43,7 @@ analysis_path = f'{filepath}/Dropbox (University of Oregon)/Kapoor_Ananya/01_Pro
 # analysis_path = '/home/akapoor/Dropbox (University of Oregon)/Kapoor_Ananya/01_Projects/01_b_Canary_SSL/TweetyCLR_Repo/'
 
 # # Parameters we set
-num_spec = 10
+num_spec = 2
 window_size = 100
 stride = 10
 
@@ -143,7 +143,7 @@ reducer = umap.UMAP(metric = custom_distance, random_state = 295)
 
 
 total_dataset = TensorDataset(torch.tensor(simple_tweetyclr.stacked_windows.reshape(simple_tweetyclr.stacked_windows.shape[0], 1, 100, 151)))
-batch_size = 256
+batch_size = 64
 total_dataloader = DataLoader(total_dataset, batch_size=batch_size , shuffle=False)
 
 list_of_images = []
@@ -206,7 +206,7 @@ class Encoder(nn.Module):
         self.relu = nn.ReLU()
         # self.relu = nn.LeakyReLU(0.01)
         
-        self.fc = nn.Linear(320, 1)
+        self.fc = nn.Linear(320, 100)
 
         self._to_linear = 1
         
@@ -260,7 +260,7 @@ class Encoder(nn.Module):
         return output1, output2
     
     def calculate_loss(self, input1, input2, output1, output2):
-        actual_loss = (input1 != input2).sum().unsqueeze(0).to(torch.float32)
+        actual_loss = (input1 != input2).sum(dim = 1).unsqueeze(0).to(torch.float32).sum()
         predicted_loss = torch.abs(output1 - output2).sum().unsqueeze(0).to(torch.float32)
         
         return actual_loss, predicted_loss
@@ -270,10 +270,10 @@ simple_tweetyclr.shuffling(295)
 # torch.manual_seed(295)
 shuffled_indices = simple_tweetyclr.shuffled_indices
 
-stacked_windows = simple_tweetyclr.stacked_windows[shuffled_indices,:]
-# stacked_windows = simple_tweetyclr.stacked_windows.copy()
-labels = simple_tweetyclr.stacked_labels_for_window[shuffled_indices, :]
-# labels = simple_tweetyclr.stacked_labels_for_window.copy()
+# stacked_windows = simple_tweetyclr.stacked_windows[shuffled_indices,:]
+stacked_windows = simple_tweetyclr.stacked_windows.copy()
+# labels = simple_tweetyclr.stacked_labels_for_window[shuffled_indices, :]
+labels = simple_tweetyclr.stacked_labels_for_window.copy()
 
 # =============================================================================
 # Dataset curation for Siamese Network
@@ -286,6 +286,13 @@ class SiameseDataset(Dataset):
     def __init__(self, data, seed = 295):
         self.data = data
         self.seed = seed
+        
+    # def calculate_edit_distance(self, x1, x2):
+    #     label1 = x1[1]
+    #     label2 = x2[1]
+        
+    #     dist = 
+        
 
     def __getitem__(self, index):
         random.seed(index)
@@ -335,20 +342,23 @@ criterion = nn.MSELoss()  # MSE Loss
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 model.to(device)
-num_epochs = 500
-# scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.05, patience=50, verbose=True)
+num_epochs = 5000
+scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.005, patience=50, verbose=True)
 
 predictions = []
 epoch_loss_train = []
 epoch_loss_test = []
 predicted_vals = []
 actual_vals = []
+# Set the accumulation steps
+accumulation_steps = 1 # This is the number of steps over which you accumulate gradients
+
 for epoch in range(num_epochs):
     model.train()  # Set model to training mode
     batch_loss_train = 0
     batch_loss_test = 0
     
-    for data in train_loader:
+    for i, data in enumerate(train_loader):
     # data = next(iter(train_loader))
     # for i in np.arange(1):
         # Transfer inputs and labels to the GPU
@@ -363,7 +373,6 @@ for epoch in range(num_epochs):
         input2 = input2.to(device, dtype = torch.float32)
         label2 = label2.to(device, dtype = torch.float32)
         
-        optimizer.zero_grad()
         output1, output2 = model(input1, input2)
         
         actual_loss, predicted_loss = model.calculate_loss(label1, label2, output1, output2)
@@ -371,20 +380,19 @@ for epoch in range(num_epochs):
         actual_vals.append(actual_loss.item())
         
         train_loss = criterion(predicted_loss, actual_loss)
-        batch_loss_train += train_loss.item()
-        optimizer.zero_grad()
-        train_loss.backward()
+        train_loss = train_loss / accumulation_steps  # Scale the loss
         
-        # After calling loss.backward(), but before optimizer.step()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)  # or another threshold value
-        # if epoch >300:
-        #     for name, param in model.named_parameters():
-        #         if param.grad is not None:
-        #             grad_mean = torch.mean(param.grad)
-        #             grad_max = torch.max(param.grad)
-        #             print(f"{name} - grad mean: {grad_mean}, grad max: {grad_max}")
-                
+        train_loss.backward()  # Accumulate gradients
+        batch_loss_train += train_loss.item() * accumulation_steps  # Undo the averaging for logging
+        
+        if (i + 1) % accumulation_steps == 0:
+            optimizer.step()  # Perform a step every accumulation_steps
+            optimizer.zero_grad()  # Reset gradients after an update
+
+    # If the number of batches is not divisible by accumulation_steps, you need to step after the final batch
+    if len(train_loader) % accumulation_steps != 0:
         optimizer.step()
+        optimizer.zero_grad()
 
     model.eval()
         
@@ -408,6 +416,7 @@ for epoch in range(num_epochs):
         # actual_vals.append(actual_loss.item())
         
         loss = criterion(predicted_loss, actual_loss)
+        loss = loss / accumulation_steps
         batch_loss_test += loss.item()
     
     # for i, (inputs, labels) in enumerate(test_loader):
@@ -435,7 +444,7 @@ for epoch in range(num_epochs):
     epoch_loss_train.append(batch_loss_train)
     epoch_loss_test.append(batch_loss_test)
     # Step the scheduler based on validation loss
-    # scheduler.step(train_loss)
+    scheduler.step(train_loss)
     
     # Assuming 'model' is your neural network model
     # for name, parameter in model.named_parameters():
@@ -444,13 +453,12 @@ for epoch in range(num_epochs):
     #         print(f"Gradient norm of {name}: {grad_norm}")
     
     # Step the scheduler at the end of the epoch
-    # scheduler.step()
     # epoch_loss_train.append(batch_loss_train/len(train_loader))
     # epoch_loss_test.append(batch_loss_test/len(test_loader))
     # epoch_loss.append(batch_loss / len(train_loader))
     
     # print(f'Epoch [{epoch+1}/{num_epochs}], Train Loss: {epoch_loss_train[-1]:.4f}, Test Loss: {epoch_loss_test[-1]:.4f}')
-    print(f'Ep1och [{epoch+1}/{num_epochs}], Train Loss: {epoch_loss_train[-1]:.4f}')
+    print(f'Epoch [{epoch+1}/{num_epochs}], Train Loss: {epoch_loss_train[-1]:.4f}')
     
 
 epoch_loss_train_arr = np.array(epoch_loss_train)
@@ -500,11 +508,12 @@ plt.show()
 
 model_arch = str(model)
 forward_method = inspect.getsource(model.forward)
+forward_once_method = inspect.getsource(model.forward_once)
 
 # Splitting the string into an array of lines
 model_arch_lines = model_arch.split('\n')
 forward_method_lines = forward_method.split('\n')
-
+forward_once_method_lines = forward_once_method.split('\n')
 
 experiment_params = {
     "Data_Directory": bird_dir,
@@ -523,7 +532,8 @@ experiment_params = {
     "Criterion": str(criterion), 
     "Model_Architecture": model_arch_lines, 
     "Forward_Method": forward_method_lines, 
-    "Dataloader_Shuffle": True
+    "Forward_Once_Method": forward_once_method_lines,
+    "Dataloader_Shuffle": shuffle_status
     }
 
 import json
