@@ -43,7 +43,7 @@ analysis_path = f'{filepath}/Dropbox (University of Oregon)/Kapoor_Ananya/01_Pro
 # analysis_path = '/home/akapoor/Dropbox (University of Oregon)/Kapoor_Ananya/01_Projects/01_b_Canary_SSL/TweetyCLR_Repo/'
 
 # # Parameters we set
-num_spec = 2
+num_spec = 1
 window_size = 100
 stride = 10
 
@@ -143,7 +143,7 @@ reducer = umap.UMAP(metric = custom_distance, random_state = 295)
 
 
 total_dataset = TensorDataset(torch.tensor(simple_tweetyclr.stacked_windows.reshape(simple_tweetyclr.stacked_windows.shape[0], 1, 100, 151)))
-batch_size = 64
+batch_size = 5
 total_dataloader = DataLoader(total_dataset, batch_size=batch_size , shuffle=False)
 
 list_of_images = []
@@ -203,10 +203,12 @@ class Encoder(nn.Module):
         self.bn9 = nn.BatchNorm2d(24)
         self.bn10 = nn.BatchNorm2d(16)
 
-        self.relu = nn.ReLU()
-        # self.relu = nn.LeakyReLU(0.01)
+        # self.relu = nn.ReLU()
+        self.relu = nn.LeakyReLU(0.01)
+        self.sigmoid = nn.Sigmoid()
         
-        self.fc = nn.Linear(320, 100)
+        self.fc1 = nn.Linear(320, 1)
+        self.fc2 = nn.Linear(100, 50)
 
         self._to_linear = 1
         
@@ -248,7 +250,9 @@ class Encoder(nn.Module):
 
         x_flattened = x.view(-1, 320)
 
-        x = self.relu(self.fc(x_flattened))
+        # x = self.relu(self.fc1(x_flattened))
+        # x = self.relu(self.fc2(x))
+        x = self.sigmoid(self.fc1(x_flattened))*100
         
         return x
     
@@ -259,11 +263,9 @@ class Encoder(nn.Module):
         
         return output1, output2
     
-    def calculate_loss(self, input1, input2, output1, output2):
-        actual_loss = (input1 != input2).sum(dim = 1).unsqueeze(0).to(torch.float32).sum()
-        predicted_loss = torch.abs(output1 - output2).sum().unsqueeze(0).to(torch.float32)
-        
-        return actual_loss, predicted_loss
+    def calculate_loss(self, output1, output2):
+        predicted_loss = torch.abs(output1 - output2).sum(dim = 1).to(torch.float32) 
+        return predicted_loss
  
 
 simple_tweetyclr.shuffling(295)
@@ -272,8 +274,10 @@ shuffled_indices = simple_tweetyclr.shuffled_indices
 
 # stacked_windows = simple_tweetyclr.stacked_windows[shuffled_indices,:]
 stacked_windows = simple_tweetyclr.stacked_windows.copy()
+stacked_windows = stacked_windows[0:20,:]
 # labels = simple_tweetyclr.stacked_labels_for_window[shuffled_indices, :]
 labels = simple_tweetyclr.stacked_labels_for_window.copy()
+labels = labels[0:20,:]
 
 # =============================================================================
 # Dataset curation for Siamese Network
@@ -287,23 +291,26 @@ class SiameseDataset(Dataset):
         self.data = data
         self.seed = seed
         
-    # def calculate_edit_distance(self, x1, x2):
-    #     label1 = x1[1]
-    #     label2 = x2[1]
+    def calculate_edit_distance(self, x1, x2):
+        label1 = x1[1]
+        label2 = x2[1]
         
-    #     dist = 
+        dist = (label1 != label2).sum().unsqueeze(0).to(torch.float32).sum()
+        return dist
         
 
     def __getitem__(self, index):
-        random.seed(index)
+        # random.seed(index)
         # Select the first item of the pair
         x1 = self.data[index]
 
         # Randomly select the second item of the pair
         idx2 = random.randint(0, len(self.data) - 1)
         x2 = self.data[idx2]
+        
+        dist = self.calculate_edit_distance(x1, x2)
 
-        return x1, x2
+        return x1, x2, dist, [index, idx2]
 
     def __len__(self):
         return len(self.data)
@@ -329,7 +336,7 @@ shuffle_status = True
 
 train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=shuffle_status)
 test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=shuffle_status)
-
+a = next(iter(train_loader))
 # =============================================================================
 # Model Training
 # =============================================================================
@@ -342,7 +349,7 @@ criterion = nn.MSELoss()  # MSE Loss
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 model.to(device)
-num_epochs = 5000
+num_epochs = 1000
 scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.005, patience=50, verbose=True)
 
 predictions = []
@@ -354,18 +361,20 @@ actual_vals = []
 accumulation_steps = 1 # This is the number of steps over which you accumulate gradients
 
 for epoch in range(num_epochs):
-    model.train()  # Set model to training mode
     batch_loss_train = 0
     batch_loss_test = 0
     
     for i, data in enumerate(train_loader):
+        model.train()  # Set model to training mode
+        optimizer.zero_grad()
     # data = next(iter(train_loader))
     # for i in np.arange(1):
         # Transfer inputs and labels to the GPU
-        x1, x2 = data
+        x1, x2, targets, indices = data
         
         input1, label1 = x1[0], x1[1]
         input2, label2 = x2[0], x2[1]
+        
         
         input1 = input1.to(device, dtype = torch.float32)
         label1 = label1.to(device, dtype = torch.float32)
@@ -373,32 +382,24 @@ for epoch in range(num_epochs):
         input2 = input2.to(device, dtype = torch.float32)
         label2 = label2.to(device, dtype = torch.float32)
         
+        targets = targets.to(device)
+        
         output1, output2 = model(input1, input2)
         
-        actual_loss, predicted_loss = model.calculate_loss(label1, label2, output1, output2)
-        predicted_vals.append(predicted_loss.item())
-        actual_vals.append(actual_loss.item())
+        predicted_loss = model.calculate_loss(output1, output2)
+        # predicted_vals.append(predicted_loss.item())
+        # actual_vals.append(actual_loss.item())
         
-        train_loss = criterion(predicted_loss, actual_loss)
-        train_loss = train_loss / accumulation_steps  # Scale the loss
-        
-        train_loss.backward()  # Accumulate gradients
-        batch_loss_train += train_loss.item() * accumulation_steps  # Undo the averaging for logging
-        
-        if (i + 1) % accumulation_steps == 0:
-            optimizer.step()  # Perform a step every accumulation_steps
-            optimizer.zero_grad()  # Reset gradients after an update
-
-    # If the number of batches is not divisible by accumulation_steps, you need to step after the final batch
-    if len(train_loader) % accumulation_steps != 0:
+        train_loss = criterion(predicted_loss, targets)
+        train_loss.backward()
+        batch_loss_train += train_loss.item()        
         optimizer.step()
-        optimizer.zero_grad()
-
+        
     model.eval()
         
     for data in test_loader:
         
-        x1, x2 = data
+        x1, x2, targets, indices = data
         
         input1, label1 = x1[0], x1[1]
         input2, label2 = x2[0], x2[1]
@@ -409,15 +410,19 @@ for epoch in range(num_epochs):
         input2 = input2.to(device, dtype = torch.float32)
         label2 = label2.to(device, dtype = torch.float32)
         
+        targets = targets.to(device)
+
+        
         output1, output2 = model(input1, input2)
         
-        actual_loss, predicted_loss = model.calculate_loss(label1, label2, output1, output2)
+        predicted_loss = model.calculate_loss(output1, output2)
         # predicted_vals.append(predicted_loss.item())
         # actual_vals.append(actual_loss.item())
         
-        loss = criterion(predicted_loss, actual_loss)
+        loss = criterion(predicted_loss, targets)
         loss = loss / accumulation_steps
         batch_loss_test += loss.item()
+        
     
     # for i, (inputs, labels) in enumerate(test_loader):
     #     inputs = inputs.to(device, dtype=torch.float32)
@@ -444,7 +449,7 @@ for epoch in range(num_epochs):
     epoch_loss_train.append(batch_loss_train)
     epoch_loss_test.append(batch_loss_test)
     # Step the scheduler based on validation loss
-    scheduler.step(train_loss)
+    # scheduler.step(train_loss)
     
     # Assuming 'model' is your neural network model
     # for name, parameter in model.named_parameters():
