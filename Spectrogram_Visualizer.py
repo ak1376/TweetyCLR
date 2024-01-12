@@ -129,8 +129,6 @@ class DataPlotter(QWidget):
     
         self.newScatter.setData(pos = self.emb[findIndices,:])
     
-    
-    
         self.embPlot.setXRange(np.min(self.emb[:,0]) - 1, np.max(self.emb[:,0] + 1), padding=0)
         self.embPlot.setYRange(np.min(self.emb[:,1]) - 1, np.max(self.emb[:,1] + 1), padding=0)
         
@@ -146,7 +144,6 @@ class DataPlotter(QWidget):
 
         self.emb = embedding
         self.startEndTimes = startEndTimes
-
 
         # self.cmap = cm.get_cmap('hsv')
         # norm_times = np.arange(self.emb.shape[0])/self.emb.shape[0]
@@ -204,7 +201,14 @@ class DataPlotter(QWidget):
 
         self.embPlot.setXRange(self.embMinX - 1, self.embMaxX + 1, padding=0)
         self.embPlot.setYRange(self.embMinY - 1, self.embMaxY + 1, padding=0)
-
+        
+    def zooming_in(self):
+        height,width = self.behave_array.shape
+        x_start, x_end = self.prompt_timepoints()
+        y_start, y_end = 0, height
+        
+        self.behavePlot.getViewBox().setLimits(yMin=y_start, yMax=y_end)
+        self.behavePlot.getViewBox().setLimits(xMin=x_start, xMax=x_end)
 
     def plot_file(self,filePath):
 
@@ -229,20 +233,32 @@ class DataPlotter(QWidget):
 
         # feed it (N by 2) embedding and length N list of times associated with each point
         plotter.accept_embedding(A['embVals'],A['embStartEnd'], self.mean_colors_per_minispec)
-
-    def zooming_in(self):
-        height,width = self.behave_array.shape
-        x_start, x_end = self.prompt_timepoints()
-        y_start, y_end = 0, height
         
-        self.behavePlot.getViewBox().setLimits(yMin=y_start, yMax=y_end)
-        self.behavePlot.getViewBox().setLimits(xMin=x_start, xMax=x_end)
-
-
+        
+    def clear_previous_highlights(self):
+        # Clear previous highlights logic
+        self.additionList = self.additionList[-1:]
+        self.additionCount = 0.05
+        self.set_behavioral_image(self.behave_array,self.colors_per_timepoint, addition = self.additionList)
+        # Any other necessary steps to clear the highlights
+        
     def addROI(self):
+        # # Ask user if they want to clear previous highlights
+        # reply = QMessageBox.question(self, 'Clear Highlights', 
+        #                              "Do you want to clear all previous highlights?", 
+        #                              QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+    
+        # if reply == QMessageBox.Yes:
+        #     self.clear_previous_highlights()
+    
+        # Rest of the method
         self.r1 = pg.EllipseROI([0, 0], [self.embMaxX/5, self.embMaxY/5], pen=(3,9))
-        # r2a = pg.PolyLineROI([[0,0], [0,self.embMaxY/5], [self.embMaxX/5,self.embMaxY/5], [self.embMaxX/5,0]], closed=True)
         self.embPlot.addItem(self.r1)
+        
+    # def addROI(self):
+    #     self.r1 = pg.EllipseROI([0, 0], [self.embMaxX/5, self.embMaxY/5], pen=(3,9))
+    #     # r2a = pg.PolyLineROI([[0,0], [0,self.embMaxY/5], [self.embMaxX/5,self.embMaxY/5], [self.embMaxX/5,0]], closed=True)
+    #     self.embPlot.addItem(self.r1)
 
         #self.r1.sigRegionChanged.connect(self.update2)
 
@@ -276,9 +292,11 @@ class DataPlotter(QWidget):
         indices_in_roi = np.where(bound < 1)[0]
         # print(f'The number of indices in the ROI is {indices_in_roi.shape}')
         print(indices_in_roi)
-        clear_highlights = input("Clear previous highlights? (y/n): ")
-        if clear_highlights == "y":
-            self.additionList = []
+            
+            
+        # clear_highlights = input("Clear previous highlights? (y/n): ")
+        # if clear_highlights == "y":
+        #     self.additionList = []
 
         # # points_in_roi = [QPointF(x, y) for x, y in self.emb if self.r1.contains(QPointF(x, y))]
         # # print(points_in_roi)
@@ -317,9 +335,21 @@ class DataPlotter(QWidget):
         # print(f'The Shape of the Temporary Image: {tempImg.shape}')
         # print(f'The Length of the Addition List: {len(self.additionList)}')
         self.additionCount += .05
+        
+        
+        if len(self.additionList) > 1:
+            # Ask user if they want to clear previous highlights
+            reply = QMessageBox.question(self, 'Clear Highlights', 
+                                          "Do you want to clear all previous highlights?", 
+                                          QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        
+            if reply == QMessageBox.Yes:
+                self.clear_previous_highlights()
 
         self.set_behavioral_image(self.behave_array,self.colors_per_timepoint, addition = self.additionList)
+        
 
+        
         # self.newScatter.setData(pos = self.emb[indices_in_roi,:])
 
         # self.embPlot.setXRange(np.min(self.emb[:,0]) - 1, np.max(self.emb[:,0] + 1), padding=0)
@@ -329,6 +359,8 @@ class DataPlotter(QWidget):
     def show(self):
         self.win.show()
         self.app.exec_()
+        
+    
 
 
 # IDEA (iterate through bouts..)
@@ -343,12 +375,13 @@ if __name__ == '__main__':
     #/Users/ethanmuchnik/Desktop/Series_GUI/SortedResults/Pk146-Jul28/1B.npz
     #plotter.plot_file('/Users/ethanmuchnik/Desktop/Series_GUI/SortedResults/Pk146-Jul28/1B.npz')
     plotter.plot_file('/home/akapoor/Downloads/total_dict_hard_MEGA.npz')
+    
     # plotter.plot_file('working.npz')
 
     plotter.addROI() # This plots the ROI circle
     
-    plotter.zooming_in()
+    # plotter.zooming_in()
 
     # Show
     plotter.show()
-    
+
