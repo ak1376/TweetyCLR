@@ -145,12 +145,11 @@ class DataPlotter(QWidget):
         self.emb = embedding
         self.startEndTimes = startEndTimes
 
-        # self.cmap = cm.get_cmap('hsv')
-        # norm_times = np.arange(self.emb.shape[0])/self.emb.shape[0]
         if mean_colors_for_minispec is not None:
             colors = np.concatenate((mean_colors_for_minispec, np.ones((mean_colors_for_minispec.shape[0],1))), axis = 1)
             colors*=255
         else:
+            self.cmap = cm.get_cmap('hsv')
             norm_times = np.arange(self.emb.shape[0])/self.emb.shape[0]
             colors = self.cmap(norm_times) * 255
 
@@ -224,7 +223,7 @@ class DataPlotter(QWidget):
             self.colors_per_timepoint = None
             
         self.behavioralArr = A['behavioralArr']
-        plotter.set_behavioral_image(A['behavioralArr'], A['colors_per_timepoint'])
+        plotter.set_behavioral_image(A['behavioralArr'], self.colors_per_timepoint)
         
         if 'mean_colors_per_minispec' in A:
             self.mean_colors_per_minispec = A['mean_colors_per_minispec']
@@ -373,8 +372,8 @@ if __name__ == '__main__':
     # Accept folder of data
     #plotter.accept_folder('SortedResults/B119-Jul28')
     #/Users/ethanmuchnik/Desktop/Series_GUI/SortedResults/Pk146-Jul28/1B.npz
-    #plotter.plot_file('/Users/ethanmuchnik/Desktop/Series_GUI/SortedResults/Pk146-Jul28/1B.npz')
-    plotter.plot_file('/home/akapoor/Downloads/total_dict_hard_MEGA.npz')
+    plotter.plot_file('/home/akapoor/Dropbox (University of Oregon)/AK_RHV_Analysis/UMAP_Analysis/Num_Spectrograms_10_Window_Size_100_Stride_10/analysis_dict.npz')
+    # plotter.plot_file('/home/akapoor/Downloads/total_dict_hard_MEGA.npz')
     
     # plotter.plot_file('working.npz')
 
