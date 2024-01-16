@@ -211,8 +211,8 @@ class Encoder(nn.Module):
         self.bn9 = nn.BatchNorm2d(24)
         self.bn10 = nn.BatchNorm2d(16)
 
-        # self.relu = nn.ReLU()
-        self.relu = nn.LeakyReLU(0.01)
+        self.relu = nn.ReLU()
+        # self.relu = nn.LeakyReLU(0.01)
         self.sigmoid = nn.Sigmoid()
         
         self.fc1 = nn.Linear(320, 1)
@@ -320,56 +320,70 @@ labels = simple_tweetyclr.stacked_labels_for_window.copy()
 from torch.utils.data import Dataset
 
 class SiameseDataset(Dataset):
-    def __init__(self, data, seed = 295):
+    def __init__(self, data):
         self.data = data
-        self.seed = seed
-        
-    def calculate_edit_distance(self, x1, x2):
-        '''
-
-        Parameters
-        ----------
-        x1 : torch tensor
-            Array of ground truth labels for the first spectrogram slice.
-        x2 : torch tensor
-            Array of ground truth labels for the second spectrogram slice.
-
-        Returns
-        -------
-        dist : torch tensor
-            Scalar value of the edit distance.
-
-        '''
-        label1 = x1[1]
-        label2 = x2[1]
-        
-        dist = (label1 != label2).sum().unsqueeze(0).to(torch.float32).sum()
-        return dist
-        
-
-    def __getitem__(self, index):
-        random.seed(index)
-        # Select the first item of the pair
-        x1 = self.data[index]
-
-        # Randomly select the second item of the pair
-        idx2 = random.randint(0, len(self.data) - 1) # Random selection w.r.t. the random seed
-        x2 = self.data[idx2]
-        
-        dist = self.calculate_edit_distance(x1, x2)
-
-        return x1, x2, dist, [index, idx2]
 
     def __len__(self):
         return len(self.data)
+
+    def __getitem__(self, index):
+        # Just return a single data item
+        return self.data[index]
+
+# class SiameseDataset(Dataset):
+#     def __init__(self, data, seed = 295):
+#         self.data = data
+#         self.seed = seed
+        
+#     def calculate_edit_distance(self, x1, x2):
+#         '''
+
+#         Parameters
+#         ----------
+#         x1 : torch tensor
+#             Array of ground truth labels for the first spectrogram slice.
+#         x2 : torch tensor
+#             Array of ground truth labels for the second spectrogram slice.
+
+#         Returns
+#         -------
+#         dist : torch tensor
+#             Scalar value of the edit distance.
+
+#         '''
+#         label1 = x1[1]
+#         label2 = x2[1]
+        
+#         dist = (label1 != label2).sum().unsqueeze(0).to(torch.float32).sum()
+#         return dist
+        
+
+#     def __getitem__(self, index):
+#         random.seed(index)
+#         # Select the first item of the pair
+#         x1 = self.data[index]
+
+#         # Randomly select the second item of the pair
+#         idx2 = random.randint(0, len(self.data) - 1) # Random selection w.r.t. the random seed
+#         x2 = self.data[idx2]
+        
+#         dist = self.calculate_edit_distance(x1, x2)
+
+#         return x1, x2, dist, [index, idx2]
+
+#     def __len__(self):
+#         return len(self.data)
 
 # Creating the necessary structure for the dataset for analysis
 dataset = torch.tensor(stacked_windows.reshape(stacked_windows.shape[0], 1, 100, 151))
 
 dataset = TensorDataset(dataset, torch.tensor(labels))
 
+# Initialize Dataset and DataLoader
 siamese_dataset = SiameseDataset(dataset)
-a = next(iter(siamese_dataset))
+
+# siamese_dataset = SiameseDataset(dataset)
+# a = next(iter(siamese_dataset))
 # len(a) = 2, where the first dimension is a tuple of the spectrogram slices and the second dimension is a tuple of the ground truth labels
 
 # Define the split sizes -- what is the train test split ? 
@@ -382,7 +396,7 @@ from torch.utils.data import random_split
 # Split the dataset into a training and testing dataset
 train_dataset, test_dataset = random_split(siamese_dataset, [train_size, test_size])
 
-shuffle_status = True # Dynamic shuffling within the dataloader 
+shuffle_status = False # Dynamic shuffling within the dataloader 
 
 train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=shuffle_status)
 test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=shuffle_status)
@@ -411,35 +425,43 @@ actual_vals = []
 # Set the accumulation steps
 accumulation_steps = 1 # This is the number of steps over which you accumulate gradients
 
-
+# Training Loop
+model.train()
 for epoch in range(num_epochs):
     batch_loss_train = 0
-    batch_loss_test = 0
-    
-    for i, data in enumerate(train_loader):
+    for data in train_loader:
         model.train()  # Set model to training mode
         optimizer.zero_grad()
         
-        # Transfer inputs and labels to the GPU
-        x1, x2, targets, indices = data
+        num_samples = len(data[0])
         
-        input1, label1 = x1[0], x1[1]
-        input2, label2 = x2[0], x2[1]
+        # If odd number of samples, reduce by one to make it even
+        if num_samples % 2 != 0:
+            num_samples -= 1
         
+        # Generate unique indices for the adjusted batch
+        unique_indices = np.random.choice(num_samples, size=num_samples, replace=False)
+        idx1, idx2 = np.array_split(unique_indices, 2)
         
-        input1 = input1.to(device, dtype = torch.float32)
-        label1 = label1.to(device, dtype = torch.float32)
+        x1_inputs = data[0][idx1]
+        x1_labels = data[1][idx1]
+        x2_inputs = data[0][idx2]
+        x2_labels = data[1][idx2]
         
-        input2 = input2.to(device, dtype = torch.float32)
-        label2 = label2.to(device, dtype = torch.float32)
-        
-        targets = targets.to(device)
+        # Calculate edit distance
+        dist = torch.sum((x1_labels != x2_labels), dim=1).unsqueeze(0).to(torch.float32)
+        # Transfer inputs and labels to the device
+        input1 = torch.stack(list(x1_inputs)).to(device, dtype=torch.float32)
+        label1 = torch.stack(list(x1_labels)).to(device, dtype=torch.float32)
+        input2 = torch.stack(list(x2_inputs)).to(device, dtype=torch.float32)
+        label2 = torch.stack(list(x2_labels)).to(device, dtype=torch.float32)
+        targets = dist.to(device).squeeze()
         
         # Pass our two spectrogram slices through the model
         output1, output2 = model(input1, input2)
         
-        
         predicted_edit_distance = model.calculate_loss(output1, output2)
+
         # predicted_vals.append(predicted_loss.item())
         # actual_vals.append(actual_loss.item())
         
@@ -448,182 +470,296 @@ for epoch in range(num_epochs):
         batch_loss_train += train_loss.item()        
         optimizer.step()
         
-    model.eval()
-        
-    for data in test_loader:
-        
-        x1, x2, targets, indices = data
-        
-        input1, label1 = x1[0], x1[1]
-        input2, label2 = x2[0], x2[1]
-        
-        input1 = input1.to(device, dtype = torch.float32)
-        label1 = label1.to(device, dtype = torch.float32)
-        
-        input2 = input2.to(device, dtype = torch.float32)
-        label2 = label2.to(device, dtype = torch.float32)
-        
-        targets = targets.to(device)
-
-        
-        output1, output2 = model(input1, input2)
-        
-        predicted_edit_distance = model.calculate_loss(output1, output2)
-        # predicted_vals.append(predicted_loss.item())
-        # actual_vals.append(actual_loss.item())
-        
-        loss = criterion(predicted_edit_distance, targets)
-        loss = loss / accumulation_steps
-        batch_loss_test += loss.item()
-        
-    
-    # for i, (inputs, labels) in enumerate(test_loader):
-    #     inputs = inputs.to(device, dtype=torch.float32)
-    #     labels = labels.to(device, dtype=torch.float32)
-        
-    #     pred_hamming = model(inputs)
-        
-    #     actual_hamming = [(obs2 != obs1).sum().unsqueeze(0) for obs1, obs2 in itertools.combinations(labels, 2)]
-    #     actual_hamming = torch.cat(actual_hamming, dim = 0)/100
-    #     actual_hamming = torch.sum(actual_hamming).to(torch.float32)
-        
-    #     # actual_hamming = (labels[0,:] != labels[1,:]).sum().to(torch.float32)
-    #     # actual_hamming = actual_hamming.view(1, 1)
-    #     loss = criterion(pred_hamming, actual_hamming)
-        
-    #     # Scales the loss, and calls backward() to accumulate gradients
-    #     loss = loss / accumulation_steps
-        
-    #     batch_loss_test += loss.item()
-        
-    #     break
-        
-    # Logging the loss averaged over an epoch
     epoch_loss_train.append(batch_loss_train)
-    epoch_loss_test.append(batch_loss_test)
-    # Step the scheduler based on validation loss
-    # scheduler.step(train_loss)
-    
-    # Assuming 'model' is your neural network model
-    # for name, parameter in model.named_parameters():
-    #     if parameter.grad is not None:
-    #         grad_norm = parameter.grad.norm()
-    #         print(f"Gradient norm of {name}: {grad_norm}")
-    
-    # Step the scheduler at the end of the epoch
-    # epoch_loss_train.append(batch_loss_train/len(train_loader))
-    # epoch_loss_test.append(batch_loss_test/len(test_loader))
-    # epoch_loss.append(batch_loss / len(train_loader))
-    
-    # print(f'Epoch [{epoch+1}/{num_epochs}], Train Loss: {epoch_loss_train[-1]:.4f}, Test Loss: {epoch_loss_test[-1]:.4f}')
     print(f'Epoch [{epoch+1}/{num_epochs}], Train Loss: {epoch_loss_train[-1]:.4f}')
+
+
+
+        # # Generate pairs on-the-fly
+        # batch_pairs = []
+        # for i in range(1, data[0].shape[0] // 2):  # Assuming the batch size is even
+        #     idx1 = random.randint(0, (data[0].shape[0]) - 1)
+        #     idx2 = random.randint(0, (data[0].shape[0]) - 1)
+
+        #     x1 = [data[0][idx1], data[1][idx1]]
+        #     x2 = [data[0][idx2], data[1][idx2]]
+            
+        #     # Calculate edit distance
+        #     dist = (x1[1] != x2[1]).sum().unsqueeze(0).to(torch.float32).sum()
+
+        #     # Optionally, you can also create and include the symmetric pair (x2, x1)
+        #     # batch_pairs.append((x1, x2))
+        #     batch_pairs.append([x1, x2, dist, [idx1, idx2]])
+            
+        # for j in np.arange(len(batch_pairs)):
+        #     input1, label1 = batch_pairs[j][0][0], batch_pairs[j][0][1]
+        #     input2, label2 = batch_pairs[j][1][0], batch_pairs[j][1][1]
+            
+        #     targets = batch_pairs[j][2]
+        
+        
+        
+
+        
+        
+        #     input1 = input1.to(device, dtype = torch.float32)
+        #     label1 = label1.to(device, dtype = torch.float32)
+            
+        #     input2 = input2.to(device, dtype = torch.float32)
+        #     label2 = label2.to(device, dtype = torch.float32)
+            
+        #     targets = targets.to(device)
+            
+            
+            
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# for epoch in range(num_epochs):
+#     batch_loss_train = 0
+#     batch_loss_test = 0
+    
+#     for i, data in enumerate(train_loader):
+#         model.train()  # Set model to training mode
+#         optimizer.zero_grad()
+        
+#         # Transfer inputs and labels to the GPU
+#         x1, x2, targets, indices = data
+        
+#         input1, label1 = x1[0], x1[1]
+#         input2, label2 = x2[0], x2[1]
+        
+        
+#         input1 = input1.to(device, dtype = torch.float32)
+#         label1 = label1.to(device, dtype = torch.float32)
+        
+#         input2 = input2.to(device, dtype = torch.float32)
+#         label2 = label2.to(device, dtype = torch.float32)
+        
+#         targets = targets.to(device)
+        
+#         # Pass our two spectrogram slices through the model
+#         output1, output2 = model(input1, input2)
+        
+        
+#         predicted_edit_distance = model.calculate_loss(output1, output2)
+#         # predicted_vals.append(predicted_loss.item())
+#         # actual_vals.append(actual_loss.item())
+        
+#         train_loss = criterion(predicted_edit_distance, targets)
+#         train_loss.backward()
+#         batch_loss_train += train_loss.item()        
+#         optimizer.step()
+        
+#     model.eval()
+        
+#     for data in test_loader:
+        
+#         x1, x2, targets, indices = data
+        
+#         input1, label1 = x1[0], x1[1]
+#         input2, label2 = x2[0], x2[1]
+        
+#         input1 = input1.to(device, dtype = torch.float32)
+#         label1 = label1.to(device, dtype = torch.float32)
+        
+#         input2 = input2.to(device, dtype = torch.float32)
+#         label2 = label2.to(device, dtype = torch.float32)
+        
+#         targets = targets.to(device)
+
+        
+#         output1, output2 = model(input1, input2)
+        
+#         predicted_edit_distance = model.calculate_loss(output1, output2)
+#         # predicted_vals.append(predicted_loss.item())
+#         # actual_vals.append(actual_loss.item())
+        
+#         loss = criterion(predicted_edit_distance, targets)
+#         loss = loss / accumulation_steps
+#         batch_loss_test += loss.item()
+        
+    
+#     # for i, (inputs, labels) in enumerate(test_loader):
+#     #     inputs = inputs.to(device, dtype=torch.float32)
+#     #     labels = labels.to(device, dtype=torch.float32)
+        
+#     #     pred_hamming = model(inputs)
+        
+#     #     actual_hamming = [(obs2 != obs1).sum().unsqueeze(0) for obs1, obs2 in itertools.combinations(labels, 2)]
+#     #     actual_hamming = torch.cat(actual_hamming, dim = 0)/100
+#     #     actual_hamming = torch.sum(actual_hamming).to(torch.float32)
+        
+#     #     # actual_hamming = (labels[0,:] != labels[1,:]).sum().to(torch.float32)
+#     #     # actual_hamming = actual_hamming.view(1, 1)
+#     #     loss = criterion(pred_hamming, actual_hamming)
+        
+#     #     # Scales the loss, and calls backward() to accumulate gradients
+#     #     loss = loss / accumulation_steps
+        
+#     #     batch_loss_test += loss.item()
+        
+#     #     break
+        
+#     # Logging the loss averaged over an epoch
+#     epoch_loss_train.append(batch_loss_train)
+#     epoch_loss_test.append(batch_loss_test)
+#     # Step the scheduler based on validation loss
+#     # scheduler.step(train_loss)
+    
+#     # Assuming 'model' is your neural network model
+#     # for name, parameter in model.named_parameters():
+#     #     if parameter.grad is not None:
+#     #         grad_norm = parameter.grad.norm()
+#     #         print(f"Gradient norm of {name}: {grad_norm}")
+    
+#     # Step the scheduler at the end of the epoch
+#     # epoch_loss_train.append(batch_loss_train/len(train_loader))
+#     # epoch_loss_test.append(batch_loss_test/len(test_loader))
+#     # epoch_loss.append(batch_loss / len(train_loader))
+    
+#     # print(f'Epoch [{epoch+1}/{num_epochs}], Train Loss: {epoch_loss_train[-1]:.4f}, Test Loss: {epoch_loss_test[-1]:.4f}')
+#     print(f'Epoch [{epoch+1}/{num_epochs}], Train Loss: {epoch_loss_train[-1]:.4f}')
     
 
-epoch_loss_train_arr = np.array(epoch_loss_train)
-epoch_loss_test_arr = np.array(epoch_loss_test)
+# epoch_loss_train_arr = np.array(epoch_loss_train)
+# epoch_loss_test_arr = np.array(epoch_loss_test)
 
-plt.figure()
-plt.plot(np.log(epoch_loss_train_arr + 1e-5), label = 'Train Loss')
-plt.plot(np.log(epoch_loss_test_arr + 1e-5), label = 'Validation Loss')
-plt.axhline(np.log(1e-5), color = 'red', linestyle = '--', label = 'Lowest Possible Loss')
-plt.legend()
-plt.title("Loss Curve")
-plt.xlabel("Epoch")
-plt.ylabel("log(loss + 1e-5)")
-plt.savefig(f'{folder_name}/loss_curve.png')
-plt.show()
+# plt.figure()
+# plt.plot(np.log(epoch_loss_train_arr + 1e-5), label = 'Train Loss')
+# plt.plot(np.log(epoch_loss_test_arr + 1e-5), label = 'Validation Loss')
+# plt.axhline(np.log(1e-5), color = 'red', linestyle = '--', label = 'Lowest Possible Loss')
+# plt.legend()
+# plt.title("Loss Curve")
+# plt.xlabel("Epoch")
+# plt.ylabel("log(loss + 1e-5)")
+# plt.savefig(f'{folder_name}/loss_curve.png')
+# plt.show()
 
-# Let's save the parameters from this experiment (this will go in the utils
-# file later)
+# # Let's save the parameters from this experiment (this will go in the utils
+# # file later)
 
-# Here are the parameters I want to save:
-# 1. Data parameters: 
-    # a. Number of spectrograms for analysis
-    # b. Stride
-    # c. Window size
-    # d. Total number of spectrogram slices
-    # e. Whether any standardization was applied
+# # Here are the parameters I want to save:
+# # 1. Data parameters: 
+#     # a. Number of spectrograms for analysis
+#     # b. Stride
+#     # c. Window size
+#     # d. Total number of spectrogram slices
+#     # e. Whether any standardization was applied
 
-# 2. Model parameters: 
-    # a. Optimizer type and Learning rate
-    # b. Batch size 
-    # c. Number of epochs
-    # d. Random seed
-    # e. Accumulation? 
-    # f. Train/Test split? If so, what is the proportion?
-    # g. Model architecture & any regularlization. 
-    # h. Criterion
+# # 2. Model parameters: 
+#     # a. Optimizer type and Learning rate
+#     # b. Batch size 
+#     # c. Number of epochs
+#     # d. Random seed
+#     # e. Accumulation? 
+#     # f. Train/Test split? If so, what is the proportion?
+#     # g. Model architecture & any regularlization. 
+#     # h. Criterion
     
-# data_params = {
+# # data_params = {
+# #     "Data_Directory": bird_dir,
+# #     "Window_Size": simple_tweetyclr.window_size, 
+# #     "Stride_Size": simple_tweetyclr.stride, 
+# #     "Num_Spectrograms": simple_tweetyclr.num_spec, 
+# #     "Total_Slices": simple_tweetyclr.stacked_windows.shape[0], 
+# #     "Frequencies_of_Interest": masking_freq_tuple, 
+# #     "Data_Standardization": "None"
+# #     }
+
+# model_arch = str(model)
+# forward_method = inspect.getsource(model.forward)
+# forward_once_method = inspect.getsource(model.forward_once)
+
+# # Splitting the string into an array of lines
+# model_arch_lines = model_arch.split('\n')
+# forward_method_lines = forward_method.split('\n')
+# forward_once_method_lines = forward_once_method.split('\n')
+
+# experiment_params = {
 #     "Data_Directory": bird_dir,
 #     "Window_Size": simple_tweetyclr.window_size, 
 #     "Stride_Size": simple_tweetyclr.stride, 
 #     "Num_Spectrograms": simple_tweetyclr.num_spec, 
 #     "Total_Slices": simple_tweetyclr.stacked_windows.shape[0], 
 #     "Frequencies_of_Interest": masking_freq_tuple, 
-#     "Data_Standardization": "None"
+#     "Data_Standardization": "None",
+#     "Optimizer": str(optimizer), 
+#     "Batch_Size": batch_size, 
+#     "Num_Epochs": num_epochs, 
+#     "Torch_Random_Seed": 295, 
+#     "Accumulation_Size": 1, 
+#     "Train_Proportion": train_perc,
+#     "Criterion": str(criterion), 
+#     "Model_Architecture": model_arch_lines, 
+#     "Forward_Method": forward_method_lines, 
+#     "Forward_Once_Method": forward_once_method_lines,
+#     "Dataloader_Shuffle": shuffle_status
 #     }
 
-model_arch = str(model)
-forward_method = inspect.getsource(model.forward)
-forward_once_method = inspect.getsource(model.forward_once)
+# import json
 
-# Splitting the string into an array of lines
-model_arch_lines = model_arch.split('\n')
-forward_method_lines = forward_method.split('\n')
-forward_once_method_lines = forward_once_method.split('\n')
+# with open(f'{simple_tweetyclr.folder_name}/experiment_params.json', 'w') as file:
+#     json.dump(experiment_params, file, indent=4)
 
-experiment_params = {
-    "Data_Directory": bird_dir,
-    "Window_Size": simple_tweetyclr.window_size, 
-    "Stride_Size": simple_tweetyclr.stride, 
-    "Num_Spectrograms": simple_tweetyclr.num_spec, 
-    "Total_Slices": simple_tweetyclr.stacked_windows.shape[0], 
-    "Frequencies_of_Interest": masking_freq_tuple, 
-    "Data_Standardization": "None",
-    "Optimizer": str(optimizer), 
-    "Batch_Size": batch_size, 
-    "Num_Epochs": num_epochs, 
-    "Torch_Random_Seed": 295, 
-    "Accumulation_Size": 1, 
-    "Train_Proportion": train_perc,
-    "Criterion": str(criterion), 
-    "Model_Architecture": model_arch_lines, 
-    "Forward_Method": forward_method_lines, 
-    "Forward_Once_Method": forward_once_method_lines,
-    "Dataloader_Shuffle": shuffle_status
-    }
+# # model_rep = []
 
-import json
-
-with open(f'{simple_tweetyclr.folder_name}/experiment_params.json', 'w') as file:
-    json.dump(experiment_params, file, indent=4)
-
-# model_rep = []
-
-# model.eval()
-# with torch.no_grad():
-#     for i, (inputs, labels) in enumerate(total_dataloader):
-#         inputs = inputs.to(device, dtype=torch.float32)
-#         labels = labels.to(device, dtype=torch.float32)
+# # model.eval()
+# # with torch.no_grad():
+# #     for i, (inputs, labels) in enumerate(total_dataloader):
+# #         inputs = inputs.to(device, dtype=torch.float32)
+# #         labels = labels.to(device, dtype=torch.float32)
     
-#         x = F.relu(model.bn1(model.conv1(inputs)))
-#         x = F.relu(model.bn2(model.conv2(x)))
-#         x = F.relu(model.bn3(model.conv3(x)))
-#         x = F.relu(model.bn4(model.conv4(x)))
-#         x = F.relu(model.bn5(model.conv5(x)))
-#         x = F.relu(model.bn6(model.conv6(x)))
-#         x = F.relu(model.bn7(model.conv7(x)))
-#         x = F.relu(model.bn8(model.conv8(x)))
-#         x = F.relu(model.bn9(model.conv9(x)))
-#         x = F.relu(model.bn10(model.conv10(x)))
+# #         x = F.relu(model.bn1(model.conv1(inputs)))
+# #         x = F.relu(model.bn2(model.conv2(x)))
+# #         x = F.relu(model.bn3(model.conv3(x)))
+# #         x = F.relu(model.bn4(model.conv4(x)))
+# #         x = F.relu(model.bn5(model.conv5(x)))
+# #         x = F.relu(model.bn6(model.conv6(x)))
+# #         x = F.relu(model.bn7(model.conv7(x)))
+# #         x = F.relu(model.bn8(model.conv8(x)))
+# #         x = F.relu(model.bn9(model.conv9(x)))
+# #         x = F.relu(model.bn10(model.conv10(x)))
 
-#         x_flattened = x.view(-1, 320)
-#         model_rep.append(x_flattened.clone().detach().numpy())
+# #         x_flattened = x.view(-1, 320)
+# #         model_rep.append(x_flattened.clone().detach().numpy())
         
-# model_rep1 = np.concatenate((model_rep))    
+# # model_rep1 = np.concatenate((model_rep))    
         
-# Write the experiment information to a txt file 
+# # Write the experiment information to a txt file 
 
 
 
