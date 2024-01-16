@@ -372,7 +372,7 @@ if __name__ == '__main__':
     # Accept folder of data
     #plotter.accept_folder('SortedResults/B119-Jul28')
     #/Users/ethanmuchnik/Desktop/Series_GUI/SortedResults/Pk146-Jul28/1B.npz
-    plotter.plot_file('/home/akapoor/Dropbox (University of Oregon)/AK_RHV_Analysis/UMAP_Analysis/Num_Spectrograms_10_Window_Size_100_Stride_10/analysis_dict.npz')
+    plotter.plot_file('/home/akapoor/Dropbox (University of Oregon)/AK_RHV_Analysis/USA5323/UMAP_Analysis/Num_Spectrograms_37_Window_Size_100_Stride_10/analysis_dict.npz')
     # plotter.plot_file('/home/akapoor/Downloads/total_dict_hard_MEGA.npz')
     
     # plotter.plot_file('working.npz')

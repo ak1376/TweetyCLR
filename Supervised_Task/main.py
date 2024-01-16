@@ -28,17 +28,22 @@ import itertools
 import inspect
 import torch.nn.init as init
 import random
+
+# Set random seeds for reproducibility 
 torch.manual_seed(295)
 np.random.seed(295)
 random.seed(295)
 
+# Matplotlib plotting settings
 plt.rcParams.update({'font.size': 20})
-plt.rcParams['figure.figsize'] = [15, 15]  # width and height should be in inches, e.g., [10, 6]
+plt.rcParams['figure.figsize'] = [15, 15]  # width and height should be in inches
 
+# Specify the necessary directories 
 bird_dir = f'{filepath}/Dropbox (University of Oregon)/Kapoor_Ananya/01_Projects/01_a_Rotations/Gardner_Lab/Canary_Data/llb16_data_matrices/'
 audio_files = bird_dir+'llb3_songs'
 directory = bird_dir+ 'Python_Files'
 
+# Identify the upstream location where the results will be saved. 
 analysis_path = f'{filepath}/Dropbox (University of Oregon)/Kapoor_Ananya/01_Projects/01_b_Canary_SSL/TweetyCLR_End_to_End/'
 # analysis_path = '/home/akapoor/Dropbox (University of Oregon)/Kapoor_Ananya/01_Projects/01_b_Canary_SSL/TweetyCLR_Repo/'
 
@@ -62,27 +67,32 @@ else:
     folder_name = f'{analysis_path}Supervised_Task/Num_Spectrograms_{num_spec}_Window_Size_{window_size}_Stride_{stride}'
 
 
+# Organize the files for analysis 
 files = os.listdir(directory)
 all_songs_data = [f'{directory}/{element}' for element in files if '.npz' in element] # Get the file paths of each numpy file from Yarden's data
 all_songs_data.sort()
 
+# Identity any low and high pass filtering 
 masking_freq_tuple = (500, 7000)
+
+# Dimensions of the spec slices for analysis 
 spec_dim_tuple = (window_size, 151)
 
-with open(f'{filepath}/Dropbox (University of Oregon)/Kapoor_Ananya/01_Projects/01_b_Canary_SSL/Canary_SSL_Repo/InfoNCE_Num_Spectrograms_100_Window_Size_100_Stride_10/category_colors.pkl', 'rb') as file:
+# Ground truth label coloring
+with open(f'{filepath}/Dropbox (University of Oregon)/Kapoor_Ananya/01_Projects/01_b_Canary_SSL/TweetyCLR_End_to_End/Supervised_Task/category_colors.pkl', 'rb') as file:
     category_colors = pickle.load(file)
-
-
-# The below cell initializes an object that will store useful information for contrastive learning
 
 # In[1]: Creating Dataset
 
-
+# Object that has a bunch of helper functions and does a bunch of useful things 
 simple_tweetyclr_experiment_1 = Tweetyclr(num_spec, window_size, stride, folder_name, all_songs_data, masking_freq_tuple, spec_dim_tuple, category_colors)
-# simple_tweetyclr_experiment_1.temperature_value = temp_value
+
 simple_tweetyclr = simple_tweetyclr_experiment_1
+
+# Finds the sliding windows
 simple_tweetyclr.first_time_analysis()
 
+# Documentation code
 if log_experiment == True: 
     exp_descp = input('Please give a couple of sentences describing what the experiment is testing: ')
     # Save the input to a text file
@@ -127,12 +137,8 @@ def custom_distance(x, y):
 
 reducer = umap.UMAP(metric = custom_distance, random_state = 295)
 
+# Perform UMAP decomposition
 # embed = reducer.fit_transform(stacked_windows)
-
-# np.save('/Users/AnanyaKapoor/Downloads/stacked_windows_analysis.npy', stacked_windows)
-# np.save('/Users/AnanyaKapoor/Downloads/mean_cols_analysis.npy', simple_tweetyclr.mean_colors_per_minispec)
-
-# embed = np.load(f'{simple_tweetyclr.folder_name}/raw_umap_of_specs_with_labels.npy')
 
 # plt.figure()
 # plt.scatter(embed[:,0], embed[:,1], c = simple_tweetyclr.mean_colors_per_minispec)
@@ -142,10 +148,12 @@ reducer = umap.UMAP(metric = custom_distance, random_state = 295)
 # plt.show()
 
 
+# Set up a base dataloader (which we won't directly use for modeling). Also define the batch size of interest
 total_dataset = TensorDataset(torch.tensor(simple_tweetyclr.stacked_windows.reshape(simple_tweetyclr.stacked_windows.shape[0], 1, 100, 151)))
-batch_size = 5
+batch_size = 72
 total_dataloader = DataLoader(total_dataset, batch_size=batch_size , shuffle=False)
 
+# Creating the hover images in the Bokeh plot
 list_of_images = []
 for batch_idx, (data) in enumerate(total_dataloader):
     data = data[0]
@@ -250,10 +258,16 @@ class Encoder(nn.Module):
 
         x_flattened = x.view(-1, 320)
 
-        # x = self.relu(self.fc1(x_flattened))
-        # x = self.relu(self.fc2(x))
-        x = self.sigmoid(self.fc1(x_flattened))*100
+        x = self.relu(self.fc1(x_flattened))
+        # Define the clip value
+        # clip_value = window_size  # for example
         
+        # Apply ReLU and then clip
+        # clipped_output = torch.clamp(self.relu(x), max=clip_value)
+        # x = self.relu(self.fc2(x))
+        # x = self.sigmoid(self.fc1(x_flattened))*100
+        
+        # return clipped_output
         return x
     
     def forward(self, input1, input2):
@@ -264,20 +278,39 @@ class Encoder(nn.Module):
         return output1, output2
     
     def calculate_loss(self, output1, output2):
-        predicted_loss = torch.abs(output1 - output2).sum(dim = 1).to(torch.float32) 
-        return predicted_loss
- 
+        '''
 
-simple_tweetyclr.shuffling(295)
-# torch.manual_seed(295)
+        Parameters
+        ----------
+        output1 : torch tensor
+            Model output (forward pass) of the first spectrogram slice.
+        output2 : torch tensor
+            Model output (forward pass) of the second spectrogram slice.
+
+        Returns
+        -------
+        predicted_edit_distance : torch tensor
+            Predicted edit distance for each sample in the batch .
+
+        '''
+        predicted_edit_distance = torch.abs(output1 - output2).sum(dim = 1).to(torch.float32) 
+        return predicted_edit_distance
+ 
+# Initialize random seeds for reproducibility. I chose 295 because it's my favorite highway in NJ
+simple_tweetyclr.shuffling(295) # Helper function that randomizes the spectrogram slices 
+torch.manual_seed(295)
+
+# Define the shuffled indices. 
 shuffled_indices = simple_tweetyclr.shuffled_indices
 
+
+# The below two lines are used for the "a priori" shuffling procedure. The model is able to train with this "a priori" shuffling procedure 
 # stacked_windows = simple_tweetyclr.stacked_windows[shuffled_indices,:]
-stacked_windows = simple_tweetyclr.stacked_windows.copy()
-stacked_windows = stacked_windows[0:20,:]
 # labels = simple_tweetyclr.stacked_labels_for_window[shuffled_indices, :]
+
+# Redefining the data 
+stacked_windows = simple_tweetyclr.stacked_windows.copy()
 labels = simple_tweetyclr.stacked_labels_for_window.copy()
-labels = labels[0:20,:]
 
 # =============================================================================
 # Dataset curation for Siamese Network
@@ -292,6 +325,21 @@ class SiameseDataset(Dataset):
         self.seed = seed
         
     def calculate_edit_distance(self, x1, x2):
+        '''
+
+        Parameters
+        ----------
+        x1 : torch tensor
+            Array of ground truth labels for the first spectrogram slice.
+        x2 : torch tensor
+            Array of ground truth labels for the second spectrogram slice.
+
+        Returns
+        -------
+        dist : torch tensor
+            Scalar value of the edit distance.
+
+        '''
         label1 = x1[1]
         label2 = x2[1]
         
@@ -300,12 +348,12 @@ class SiameseDataset(Dataset):
         
 
     def __getitem__(self, index):
-        # random.seed(index)
+        random.seed(index)
         # Select the first item of the pair
         x1 = self.data[index]
 
         # Randomly select the second item of the pair
-        idx2 = random.randint(0, len(self.data) - 1)
+        idx2 = random.randint(0, len(self.data) - 1) # Random selection w.r.t. the random seed
         x2 = self.data[idx2]
         
         dist = self.calculate_edit_distance(x1, x2)
@@ -315,27 +363,30 @@ class SiameseDataset(Dataset):
     def __len__(self):
         return len(self.data)
 
+# Creating the necessary structure for the dataset for analysis
 dataset = torch.tensor(stacked_windows.reshape(stacked_windows.shape[0], 1, 100, 151))
 
 dataset = TensorDataset(dataset, torch.tensor(labels))
 
 siamese_dataset = SiameseDataset(dataset)
-# a = next(iter(siamese_dataset))
+a = next(iter(siamese_dataset))
 # len(a) = 2, where the first dimension is a tuple of the spectrogram slices and the second dimension is a tuple of the ground truth labels
 
-# Define the split sizes
-train_perc = 0.8
-train_size = int(train_perc * len(dataset))  # 80% for training
-test_size = len(dataset) - train_size  # 20% for testing
-from torch.utils.data import random_split
+# Define the split sizes -- what is the train test split ? 
+train_perc = 0.8 #
+train_size = int(train_perc * len(dataset))  # (100*train_perc)% for training
+test_size = len(dataset) - train_size  # 100 - (100*train_perc)% for testing
 
-# Split the dataset
+
+from torch.utils.data import random_split
+# Split the dataset into a training and testing dataset
 train_dataset, test_dataset = random_split(siamese_dataset, [train_size, test_size])
 
-shuffle_status = True
+shuffle_status = True # Dynamic shuffling within the dataloader 
 
 train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=shuffle_status)
 test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=shuffle_status)
+
 a = next(iter(train_loader))
 # =============================================================================
 # Model Training
@@ -344,21 +395,22 @@ a = next(iter(train_loader))
 model = Encoder()
 optimizer = optim.Adam(model.parameters(), lr=1e-4)
 criterion = nn.MSELoss()  # MSE Loss
-# criterion = nn.L1Loss()
 # scheduler = StepLR(optimizer, step_size=30, gamma=0.1)
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 model.to(device)
-num_epochs = 1000
-scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.005, patience=50, verbose=True)
+num_epochs = 5000
+# scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.005, patience=50, verbose=True)
 
 predictions = []
 epoch_loss_train = []
 epoch_loss_test = []
 predicted_vals = []
 actual_vals = []
+
 # Set the accumulation steps
 accumulation_steps = 1 # This is the number of steps over which you accumulate gradients
+
 
 for epoch in range(num_epochs):
     batch_loss_train = 0
@@ -367,8 +419,7 @@ for epoch in range(num_epochs):
     for i, data in enumerate(train_loader):
         model.train()  # Set model to training mode
         optimizer.zero_grad()
-    # data = next(iter(train_loader))
-    # for i in np.arange(1):
+        
         # Transfer inputs and labels to the GPU
         x1, x2, targets, indices = data
         
@@ -384,13 +435,15 @@ for epoch in range(num_epochs):
         
         targets = targets.to(device)
         
+        # Pass our two spectrogram slices through the model
         output1, output2 = model(input1, input2)
         
-        predicted_loss = model.calculate_loss(output1, output2)
+        
+        predicted_edit_distance = model.calculate_loss(output1, output2)
         # predicted_vals.append(predicted_loss.item())
         # actual_vals.append(actual_loss.item())
         
-        train_loss = criterion(predicted_loss, targets)
+        train_loss = criterion(predicted_edit_distance, targets)
         train_loss.backward()
         batch_loss_train += train_loss.item()        
         optimizer.step()
@@ -415,11 +468,11 @@ for epoch in range(num_epochs):
         
         output1, output2 = model(input1, input2)
         
-        predicted_loss = model.calculate_loss(output1, output2)
+        predicted_edit_distance = model.calculate_loss(output1, output2)
         # predicted_vals.append(predicted_loss.item())
         # actual_vals.append(actual_loss.item())
         
-        loss = criterion(predicted_loss, targets)
+        loss = criterion(predicted_edit_distance, targets)
         loss = loss / accumulation_steps
         batch_loss_test += loss.item()
         
