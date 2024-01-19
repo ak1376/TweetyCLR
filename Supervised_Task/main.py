@@ -150,7 +150,7 @@ reducer = umap.UMAP(metric = custom_distance, random_state = 295)
 
 # Set up a base dataloader (which we won't directly use for modeling). Also define the batch size of interest
 total_dataset = TensorDataset(torch.tensor(simple_tweetyclr.stacked_windows.reshape(simple_tweetyclr.stacked_windows.shape[0], 1, 100, 151)))
-batch_size = 72
+batch_size = 1
 total_dataloader = DataLoader(total_dataset, batch_size=batch_size , shuffle=False)
 
 # Creating the hover images in the Bokeh plot
@@ -170,15 +170,14 @@ embeddable_images = simple_tweetyclr.get_images(list_of_images)
 
 # In[14]: Let's create a siamese network to predict the hamming distance
 
-# I need to modify this architecture so that I am doing the following
-# 1. Batch size is user specified
-# 2. Loss is calculated as the pairwise absolute distance between observations in the batch 
+# Here are some of the modifications I will be making (which I did not make before). 
 
-# This approach is a bit different than having a batch size of 2 and directly
-# predicting the hamming distance. I tried this approach in order to use 
-# computational power a bit better 
+# 1. My forward_once method will not contain a fc step. This will instead be in the "forward" method
+# 2. I will concatenate the high dimensional features from the penultimate layer and then apply a fc layer to those concatenated features. The dimensionality of this fc layer will be 1
+# 3. I will then compare this predicted edit distance value from (2) above with the actual edit distance
 
-# Question: is a model that is trained to match the batch pairwise hamming 
+
+# Question: is a model that is trained to match the batch pairwise edit 
 # distance conducive to good phrase representations? 
 
 import torch
@@ -211,15 +210,13 @@ class Encoder(nn.Module):
         self.bn9 = nn.BatchNorm2d(24)
         self.bn10 = nn.BatchNorm2d(16)
 
-        self.relu = nn.ReLU()
-        # self.relu = nn.LeakyReLU(0.01)
+        self.relu = nn.ReLU(inplace = True)
         self.sigmoid = nn.Sigmoid()
         
-        self.fc1 = nn.Linear(320, 1)
-        self.fc2 = nn.Linear(100, 50)
-
-        self._to_linear = 1
-        
+        self.fc = nn.Sequential(
+            nn.Linear(320, 256),
+            nn.ReLU(inplace=True)
+        )  
         
         # Initialize convolutional layers with He initialization
         self._initialize_weights()
@@ -257,46 +254,26 @@ class Encoder(nn.Module):
         x = self.relu(self.bn10(self.conv10(x)))
 
         x_flattened = x.view(-1, 320)
-
-        x = self.relu(self.fc1(x_flattened))
-        # Define the clip value
-        # clip_value = window_size  # for example
         
-        # Apply ReLU and then clip
-        # clipped_output = torch.clamp(self.relu(x), max=clip_value)
-        # x = self.relu(self.fc2(x))
-        # x = self.sigmoid(self.fc1(x_flattened))*100
-        
-        # return clipped_output
-        return x
+        return x_flattened
     
     def forward(self, input1, input2):
         
-        output1 = self.forward_once(input1)
-        output2 = self.forward_once(input2)
+        output1 = self.fc(self.forward_once(input1))
+        output2 = self.fc(self.forward_once(input2))
         
-        return output1, output2
-    
-    def calculate_loss(self, output1, output2):
-        '''
-
-        Parameters
-        ----------
-        output1 : torch tensor
-            Model output (forward pass) of the first spectrogram slice.
-        output2 : torch tensor
-            Model output (forward pass) of the second spectrogram slice.
-
-        Returns
-        -------
-        predicted_edit_distance : torch tensor
-            Predicted edit distance for each sample in the batch .
-
-        '''
         predicted_edit_distance = torch.abs(output1 - output2).sum(dim = 1).to(torch.float32) 
+
+        
+        # concatenate both images' features
+        # output = torch.cat((output1, output2), 1)
+
+        # pass the concatenation to the linear layers
+        # output = self.fc(output)
+        
         return predicted_edit_distance
  
-# Initialize random seeds for reproducibility. I chose 295 because it's my favorite highway in NJ
+# Initialize random seeds for reproducibility.
 simple_tweetyclr.shuffling(295) # Helper function that randomizes the spectrogram slices 
 torch.manual_seed(295)
 
@@ -310,70 +287,44 @@ shuffled_indices = simple_tweetyclr.shuffled_indices
 
 # Redefining the data 
 stacked_windows = simple_tweetyclr.stacked_windows.copy()
+# stacked_windows = stacked_windows[0:4,:]
 labels = simple_tweetyclr.stacked_labels_for_window.copy()
+# labels = labels[0:4,:]
 
-# =============================================================================
-# Dataset curation for Siamese Network
-# =============================================================================
+# In[15]: I want to define a method that will select the pairs that will be passed into the Siamese Network
 
-# I want to create pairs of data observations from a dataset. 
 from torch.utils.data import Dataset
 
 class SiameseDataset(Dataset):
     def __init__(self, data):
         self.data = data
+        
+    def calculate_edit_distance(self, x1, x2):
+        label1 = x1[1]
+        label2 = x2[1]
+        
+        # This function calculates the edit distance
+        dist = (label1 != label2).sum().unsqueeze(0).to(torch.float32).sum()
+        
+        return dist
+
+    def __getitem__(self, index):
+        # Select the first item of the pair
+        x1 = self.data[index]
+
+        # Randomly select the second item of the pair
+        idx2 = random.randint(0, len(self.data) - 1)
+        while idx2 == index:
+            idx2 = random.randint(0, len(self.data) - 1)
+        x2 = self.data[idx2]
+        
+        target = self.calculate_edit_distance(x1, x2)
+
+        return x1, x2, target
 
     def __len__(self):
         return len(self.data)
-
-    def __getitem__(self, index):
-        # Just return a single data item
-        return self.data[index]
-
-# class SiameseDataset(Dataset):
-#     def __init__(self, data, seed = 295):
-#         self.data = data
-#         self.seed = seed
-        
-#     def calculate_edit_distance(self, x1, x2):
-#         '''
-
-#         Parameters
-#         ----------
-#         x1 : torch tensor
-#             Array of ground truth labels for the first spectrogram slice.
-#         x2 : torch tensor
-#             Array of ground truth labels for the second spectrogram slice.
-
-#         Returns
-#         -------
-#         dist : torch tensor
-#             Scalar value of the edit distance.
-
-#         '''
-#         label1 = x1[1]
-#         label2 = x2[1]
-        
-#         dist = (label1 != label2).sum().unsqueeze(0).to(torch.float32).sum()
-#         return dist
-        
-
-#     def __getitem__(self, index):
-#         random.seed(index)
-#         # Select the first item of the pair
-#         x1 = self.data[index]
-
-#         # Randomly select the second item of the pair
-#         idx2 = random.randint(0, len(self.data) - 1) # Random selection w.r.t. the random seed
-#         x2 = self.data[idx2]
-        
-#         dist = self.calculate_edit_distance(x1, x2)
-
-#         return x1, x2, dist, [index, idx2]
-
-#     def __len__(self):
-#         return len(self.data)
-
+    
 # Creating the necessary structure for the dataset for analysis
 dataset = torch.tensor(stacked_windows.reshape(stacked_windows.shape[0], 1, 100, 151))
 
@@ -382,10 +333,9 @@ dataset = TensorDataset(dataset, torch.tensor(labels))
 # Initialize Dataset and DataLoader
 siamese_dataset = SiameseDataset(dataset)
 
-# siamese_dataset = SiameseDataset(dataset)
-# a = next(iter(siamese_dataset))
-# len(a) = 2, where the first dimension is a tuple of the spectrogram slices and the second dimension is a tuple of the ground truth labels
+a = next(iter(siamese_dataset)) # ONe example 
 
+# Split the dataset into a training and testing dataset
 # Define the split sizes -- what is the train test split ? 
 train_perc = 0.8 #
 train_size = int(train_perc * len(dataset))  # (100*train_perc)% for training
@@ -393,373 +343,144 @@ test_size = len(dataset) - train_size  # 100 - (100*train_perc)% for testing
 
 
 from torch.utils.data import random_split
-# Split the dataset into a training and testing dataset
+
+
 train_dataset, test_dataset = random_split(siamese_dataset, [train_size, test_size])
 
-shuffle_status = False # Dynamic shuffling within the dataloader 
+shuffle_status = True # Dynamic shuffling within the dataloader 
 
 train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=shuffle_status)
 test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=shuffle_status)
 
-a = next(iter(train_loader))
-# =============================================================================
-# Model Training
-# =============================================================================
-
 model = Encoder()
-optimizer = optim.Adam(model.parameters(), lr=1e-4)
+optimizer = optim.Adam(model.parameters(), lr=1e-3)
 criterion = nn.MSELoss()  # MSE Loss
 # scheduler = StepLR(optimizer, step_size=30, gamma=0.1)
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 model.to(device)
-num_epochs = 5000
-# scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.005, patience=50, verbose=True)
+num_epochs = 1000
 
-predictions = []
-epoch_loss_train = []
-epoch_loss_test = []
-predicted_vals = []
-actual_vals = []
-
-# Set the accumulation steps
-accumulation_steps = 1 # This is the number of steps over which you accumulate gradients
-
-# Training Loop
 model.train()
-for epoch in range(num_epochs):
+epoch_loss = []
+targets_list = []
+for epoch in np.arange(num_epochs):
     batch_loss_train = 0
-    for data in train_loader:
-        model.train()  # Set model to training mode
+    for batch_idx, (images_1, images_2, targets) in enumerate(train_loader):
+        image_1, label_1, image_2, label_2, targets = images_1[0].to(device, dtype = torch.float32), images_1[1].to(device,  dtype = torch.float32), images_2[0].to(device,  dtype = torch.float32), images_2[1].to(device,  dtype = torch.float32), targets.to(device)
+        targets_list.append(targets.item())
         optimizer.zero_grad()
-        
-        num_samples = len(data[0])
-        
-        # If odd number of samples, reduce by one to make it even
-        if num_samples % 2 != 0:
-            num_samples -= 1
-        
-        # Generate unique indices for the adjusted batch
-        unique_indices = np.random.choice(num_samples, size=num_samples, replace=False)
-        idx1, idx2 = np.array_split(unique_indices, 2)
-        
-        x1_inputs = data[0][idx1]
-        x1_labels = data[1][idx1]
-        x2_inputs = data[0][idx2]
-        x2_labels = data[1][idx2]
-        
-        # Calculate edit distance
-        dist = torch.sum((x1_labels != x2_labels), dim=1).unsqueeze(0).to(torch.float32)
-        # Transfer inputs and labels to the device
-        input1 = torch.stack(list(x1_inputs)).to(device, dtype=torch.float32)
-        label1 = torch.stack(list(x1_labels)).to(device, dtype=torch.float32)
-        input2 = torch.stack(list(x2_inputs)).to(device, dtype=torch.float32)
-        label2 = torch.stack(list(x2_labels)).to(device, dtype=torch.float32)
-        targets = dist.to(device).squeeze()
-        
-        # Pass our two spectrogram slices through the model
-        output1, output2 = model(input1, input2)
-        
-        predicted_edit_distance = model.calculate_loss(output1, output2)
-
-        # predicted_vals.append(predicted_loss.item())
-        # actual_vals.append(actual_loss.item())
-        
-        train_loss = criterion(predicted_edit_distance, targets)
-        train_loss.backward()
-        batch_loss_train += train_loss.item()        
+        outputs = model(image_1, image_2)
+        loss = criterion(outputs, targets)
+        loss.backward()
         optimizer.step()
+        # print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
+        #     epoch, batch_idx * len(images_1), len(train_loader.dataset),
+        #     100. * batch_idx / len(train_loader), loss.item()))
+        # batch_loss_train += loss.item()
+    print(f'Epoch: {epoch}, Training Loss = {loss.item()}')
+    epoch_loss.append(batch_loss_train)
         
-    epoch_loss_train.append(batch_loss_train)
-    print(f'Epoch [{epoch+1}/{num_epochs}], Train Loss: {epoch_loss_train[-1]:.4f}')
+plt.figure()
+plt.plot(epoch_loss)
+plt.xlabel("Epoch")   
+plt.ylabel("Loss")
+plt.savefig(f'{folder_name}/loss_curve.png')
+plt.show()
 
 
 
-        # # Generate pairs on-the-fly
-        # batch_pairs = []
-        # for i in range(1, data[0].shape[0] // 2):  # Assuming the batch size is even
-        #     idx1 = random.randint(0, (data[0].shape[0]) - 1)
-        #     idx2 = random.randint(0, (data[0].shape[0]) - 1)
+# Let's save the parameters from this experiment (this will go in the utils
+# file later)
 
-        #     x1 = [data[0][idx1], data[1][idx1]]
-        #     x2 = [data[0][idx2], data[1][idx2]]
-            
-        #     # Calculate edit distance
-        #     dist = (x1[1] != x2[1]).sum().unsqueeze(0).to(torch.float32).sum()
+# Here are the parameters I want to save:
+# 1. Data parameters: 
+    # a. Number of spectrograms for analysis
+    # b. Stride
+    # c. Window size
+    # d. Total number of spectrogram slices
+    # e. Whether any standardization was applied
 
-        #     # Optionally, you can also create and include the symmetric pair (x2, x1)
-        #     # batch_pairs.append((x1, x2))
-        #     batch_pairs.append([x1, x2, dist, [idx1, idx2]])
-            
-        # for j in np.arange(len(batch_pairs)):
-        #     input1, label1 = batch_pairs[j][0][0], batch_pairs[j][0][1]
-        #     input2, label2 = batch_pairs[j][1][0], batch_pairs[j][1][1]
-            
-        #     targets = batch_pairs[j][2]
-        
-        
-        
-
-        
-        
-        #     input1 = input1.to(device, dtype = torch.float32)
-        #     label1 = label1.to(device, dtype = torch.float32)
-            
-        #     input2 = input2.to(device, dtype = torch.float32)
-        #     label2 = label2.to(device, dtype = torch.float32)
-            
-        #     targets = targets.to(device)
-            
-            
-            
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# for epoch in range(num_epochs):
-#     batch_loss_train = 0
-#     batch_loss_test = 0
+# 2. Model parameters: 
+    # a. Optimizer type and Learning rate
+    # b. Batch size 
+    # c. Number of epochs
+    # d. Random seed
+    # e. Accumulation? 
+    # f. Train/Test split? If so, what is the proportion?
+    # g. Model architecture & any regularlization. 
+    # h. Criterion
     
-#     for i, data in enumerate(train_loader):
-#         model.train()  # Set model to training mode
-#         optimizer.zero_grad()
-        
-#         # Transfer inputs and labels to the GPU
-#         x1, x2, targets, indices = data
-        
-#         input1, label1 = x1[0], x1[1]
-#         input2, label2 = x2[0], x2[1]
-        
-        
-#         input1 = input1.to(device, dtype = torch.float32)
-#         label1 = label1.to(device, dtype = torch.float32)
-        
-#         input2 = input2.to(device, dtype = torch.float32)
-#         label2 = label2.to(device, dtype = torch.float32)
-        
-#         targets = targets.to(device)
-        
-#         # Pass our two spectrogram slices through the model
-#         output1, output2 = model(input1, input2)
-        
-        
-#         predicted_edit_distance = model.calculate_loss(output1, output2)
-#         # predicted_vals.append(predicted_loss.item())
-#         # actual_vals.append(actual_loss.item())
-        
-#         train_loss = criterion(predicted_edit_distance, targets)
-#         train_loss.backward()
-#         batch_loss_train += train_loss.item()        
-#         optimizer.step()
-        
-#     model.eval()
-        
-#     for data in test_loader:
-        
-#         x1, x2, targets, indices = data
-        
-#         input1, label1 = x1[0], x1[1]
-#         input2, label2 = x2[0], x2[1]
-        
-#         input1 = input1.to(device, dtype = torch.float32)
-#         label1 = label1.to(device, dtype = torch.float32)
-        
-#         input2 = input2.to(device, dtype = torch.float32)
-#         label2 = label2.to(device, dtype = torch.float32)
-        
-#         targets = targets.to(device)
-
-        
-#         output1, output2 = model(input1, input2)
-        
-#         predicted_edit_distance = model.calculate_loss(output1, output2)
-#         # predicted_vals.append(predicted_loss.item())
-#         # actual_vals.append(actual_loss.item())
-        
-#         loss = criterion(predicted_edit_distance, targets)
-#         loss = loss / accumulation_steps
-#         batch_loss_test += loss.item()
-        
-    
-#     # for i, (inputs, labels) in enumerate(test_loader):
-#     #     inputs = inputs.to(device, dtype=torch.float32)
-#     #     labels = labels.to(device, dtype=torch.float32)
-        
-#     #     pred_hamming = model(inputs)
-        
-#     #     actual_hamming = [(obs2 != obs1).sum().unsqueeze(0) for obs1, obs2 in itertools.combinations(labels, 2)]
-#     #     actual_hamming = torch.cat(actual_hamming, dim = 0)/100
-#     #     actual_hamming = torch.sum(actual_hamming).to(torch.float32)
-        
-#     #     # actual_hamming = (labels[0,:] != labels[1,:]).sum().to(torch.float32)
-#     #     # actual_hamming = actual_hamming.view(1, 1)
-#     #     loss = criterion(pred_hamming, actual_hamming)
-        
-#     #     # Scales the loss, and calls backward() to accumulate gradients
-#     #     loss = loss / accumulation_steps
-        
-#     #     batch_loss_test += loss.item()
-        
-#     #     break
-        
-#     # Logging the loss averaged over an epoch
-#     epoch_loss_train.append(batch_loss_train)
-#     epoch_loss_test.append(batch_loss_test)
-#     # Step the scheduler based on validation loss
-#     # scheduler.step(train_loss)
-    
-#     # Assuming 'model' is your neural network model
-#     # for name, parameter in model.named_parameters():
-#     #     if parameter.grad is not None:
-#     #         grad_norm = parameter.grad.norm()
-#     #         print(f"Gradient norm of {name}: {grad_norm}")
-    
-#     # Step the scheduler at the end of the epoch
-#     # epoch_loss_train.append(batch_loss_train/len(train_loader))
-#     # epoch_loss_test.append(batch_loss_test/len(test_loader))
-#     # epoch_loss.append(batch_loss / len(train_loader))
-    
-#     # print(f'Epoch [{epoch+1}/{num_epochs}], Train Loss: {epoch_loss_train[-1]:.4f}, Test Loss: {epoch_loss_test[-1]:.4f}')
-#     print(f'Epoch [{epoch+1}/{num_epochs}], Train Loss: {epoch_loss_train[-1]:.4f}')
-    
-
-# epoch_loss_train_arr = np.array(epoch_loss_train)
-# epoch_loss_test_arr = np.array(epoch_loss_test)
-
-# plt.figure()
-# plt.plot(np.log(epoch_loss_train_arr + 1e-5), label = 'Train Loss')
-# plt.plot(np.log(epoch_loss_test_arr + 1e-5), label = 'Validation Loss')
-# plt.axhline(np.log(1e-5), color = 'red', linestyle = '--', label = 'Lowest Possible Loss')
-# plt.legend()
-# plt.title("Loss Curve")
-# plt.xlabel("Epoch")
-# plt.ylabel("log(loss + 1e-5)")
-# plt.savefig(f'{folder_name}/loss_curve.png')
-# plt.show()
-
-# # Let's save the parameters from this experiment (this will go in the utils
-# # file later)
-
-# # Here are the parameters I want to save:
-# # 1. Data parameters: 
-#     # a. Number of spectrograms for analysis
-#     # b. Stride
-#     # c. Window size
-#     # d. Total number of spectrogram slices
-#     # e. Whether any standardization was applied
-
-# # 2. Model parameters: 
-#     # a. Optimizer type and Learning rate
-#     # b. Batch size 
-#     # c. Number of epochs
-#     # d. Random seed
-#     # e. Accumulation? 
-#     # f. Train/Test split? If so, what is the proportion?
-#     # g. Model architecture & any regularlization. 
-#     # h. Criterion
-    
-# # data_params = {
-# #     "Data_Directory": bird_dir,
-# #     "Window_Size": simple_tweetyclr.window_size, 
-# #     "Stride_Size": simple_tweetyclr.stride, 
-# #     "Num_Spectrograms": simple_tweetyclr.num_spec, 
-# #     "Total_Slices": simple_tweetyclr.stacked_windows.shape[0], 
-# #     "Frequencies_of_Interest": masking_freq_tuple, 
-# #     "Data_Standardization": "None"
-# #     }
-
-# model_arch = str(model)
-# forward_method = inspect.getsource(model.forward)
-# forward_once_method = inspect.getsource(model.forward_once)
-
-# # Splitting the string into an array of lines
-# model_arch_lines = model_arch.split('\n')
-# forward_method_lines = forward_method.split('\n')
-# forward_once_method_lines = forward_once_method.split('\n')
-
-# experiment_params = {
+# data_params = {
 #     "Data_Directory": bird_dir,
 #     "Window_Size": simple_tweetyclr.window_size, 
 #     "Stride_Size": simple_tweetyclr.stride, 
 #     "Num_Spectrograms": simple_tweetyclr.num_spec, 
 #     "Total_Slices": simple_tweetyclr.stacked_windows.shape[0], 
 #     "Frequencies_of_Interest": masking_freq_tuple, 
-#     "Data_Standardization": "None",
-#     "Optimizer": str(optimizer), 
-#     "Batch_Size": batch_size, 
-#     "Num_Epochs": num_epochs, 
-#     "Torch_Random_Seed": 295, 
-#     "Accumulation_Size": 1, 
-#     "Train_Proportion": train_perc,
-#     "Criterion": str(criterion), 
-#     "Model_Architecture": model_arch_lines, 
-#     "Forward_Method": forward_method_lines, 
-#     "Forward_Once_Method": forward_once_method_lines,
-#     "Dataloader_Shuffle": shuffle_status
+#     "Data_Standardization": "None"
 #     }
 
-# import json
+model_arch = str(model)
+forward_method = inspect.getsource(model.forward)
+forward_once_method = inspect.getsource(model.forward_once)
 
-# with open(f'{simple_tweetyclr.folder_name}/experiment_params.json', 'w') as file:
-#     json.dump(experiment_params, file, indent=4)
+# Splitting the string into an array of lines
+model_arch_lines = model_arch.split('\n')
+forward_method_lines = forward_method.split('\n')
+forward_once_method_lines = forward_once_method.split('\n')
 
-# # model_rep = []
+experiment_params = {
+    "Data_Directory": bird_dir,
+    "Window_Size": simple_tweetyclr.window_size, 
+    "Stride_Size": simple_tweetyclr.stride, 
+    "Num_Spectrograms": simple_tweetyclr.num_spec, 
+    "Total_Slices": simple_tweetyclr.stacked_windows.shape[0], 
+    "Frequencies_of_Interest": masking_freq_tuple, 
+    "Data_Standardization": "None",
+    "Optimizer": str(optimizer), 
+    "Batch_Size": batch_size, 
+    "Num_Epochs": num_epochs, 
+    "Torch_Random_Seed": 295, 
+    "Accumulation_Size": 1, 
+    "Train_Proportion": train_perc,
+    "Criterion": str(criterion), 
+    "Model_Architecture": model_arch_lines, 
+    "Forward_Method": forward_method_lines, 
+    "Forward_Once_Method": forward_once_method_lines,
+    "Dataloader_Shuffle": shuffle_status
+    }
 
-# # model.eval()
-# # with torch.no_grad():
-# #     for i, (inputs, labels) in enumerate(total_dataloader):
-# #         inputs = inputs.to(device, dtype=torch.float32)
-# #         labels = labels.to(device, dtype=torch.float32)
+import json
+
+with open(f'{simple_tweetyclr.folder_name}/experiment_params.json', 'w') as file:
+    json.dump(experiment_params, file, indent=4)
+
+# model_rep = []
+
+# model.eval()
+# with torch.no_grad():
+#     for i, (inputs, labels) in enumerate(total_dataloader):
+#         inputs = inputs.to(device, dtype=torch.float32)
+#         labels = labels.to(device, dtype=torch.float32)
     
-# #         x = F.relu(model.bn1(model.conv1(inputs)))
-# #         x = F.relu(model.bn2(model.conv2(x)))
-# #         x = F.relu(model.bn3(model.conv3(x)))
-# #         x = F.relu(model.bn4(model.conv4(x)))
-# #         x = F.relu(model.bn5(model.conv5(x)))
-# #         x = F.relu(model.bn6(model.conv6(x)))
-# #         x = F.relu(model.bn7(model.conv7(x)))
-# #         x = F.relu(model.bn8(model.conv8(x)))
-# #         x = F.relu(model.bn9(model.conv9(x)))
-# #         x = F.relu(model.bn10(model.conv10(x)))
+#         x = F.relu(model.bn1(model.conv1(inputs)))
+#         x = F.relu(model.bn2(model.conv2(x)))
+#         x = F.relu(model.bn3(model.conv3(x)))
+#         x = F.relu(model.bn4(model.conv4(x)))
+#         x = F.relu(model.bn5(model.conv5(x)))
+#         x = F.relu(model.bn6(model.conv6(x)))
+#         x = F.relu(model.bn7(model.conv7(x)))
+#         x = F.relu(model.bn8(model.conv8(x)))
+#         x = F.relu(model.bn9(model.conv9(x)))
+#         x = F.relu(model.bn10(model.conv10(x)))
 
-# #         x_flattened = x.view(-1, 320)
-# #         model_rep.append(x_flattened.clone().detach().numpy())
+#         x_flattened = x.view(-1, 320)
+#         model_rep.append(x_flattened.clone().detach().numpy())
         
-# # model_rep1 = np.concatenate((model_rep))    
+# model_rep1 = np.concatenate((model_rep))    
         
-# # Write the experiment information to a txt file 
+# Write the experiment information to a txt file 
 
 
 
