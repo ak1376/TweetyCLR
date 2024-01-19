@@ -3,7 +3,7 @@
 """
 Created on Wed Dec 20 11:11:09 2023
 
-UMAP analysis of canary song spectrogram slices. Instead of doing a UMAP analysis on the spectrogram slices, I am doing a UMAP on the slice labels. The hope is that 
+UMAP analysis of canary song spectrogram slices. Instead of doing a UMAP analysis on the spectrogram slices, I am doing a UMAP on the slice labels.
 
 @author: AnanyaKapoor
 """
@@ -168,14 +168,7 @@ embeddable_images = simple_tweetyclr.get_images(list_of_images)
 # simple_tweetyclr.plot_UMAP_embedding(embed, simple_tweetyclr.mean_colors_per_minispec, embeddable_images, f'{simple_tweetyclr.folder_name}/Plots/UMAP_of_specs_with_labels.html', saveflag = True)
 
 
-# In[14]: Let's create a siamese network to predict the hamming distance
-
-# Here are some of the modifications I will be making (which I did not make before). 
-
-# 1. My forward_once method will not contain a fc step. This will instead be in the "forward" method
-# 2. I will concatenate the high dimensional features from the penultimate layer and then apply a fc layer to those concatenated features. The dimensionality of this fc layer will be 1
-# 3. I will then compare this predicted edit distance value from (2) above with the actual edit distance
-
+# In[14]: Let's create a siamese network to predict the edit distance
 
 # Question: is a model that is trained to match the batch pairwise edit 
 # distance conducive to good phrase representations? 
@@ -183,7 +176,7 @@ embeddable_images = simple_tweetyclr.get_images(list_of_images)
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.optim.lr_scheduler import StepLR, ReduceLROnPlateau
+# from torch.optim.lr_scheduler import StepLR, ReduceLROnPlateau
 
 class Encoder(nn.Module):
     def __init__(self):
@@ -259,17 +252,13 @@ class Encoder(nn.Module):
     
     def forward(self, input1, input2):
         
+        # Pass the two spectrogram slices through a convolutional frontend to get a representation for each slice
+        
         output1 = self.fc(self.forward_once(input1))
         output2 = self.fc(self.forward_once(input2))
         
+        # The predicted edit distance will be the sum(absolute element-wise difference) of both image representations
         predicted_edit_distance = torch.abs(output1 - output2).sum(dim = 1).to(torch.float32) 
-
-        
-        # concatenate both images' features
-        # output = torch.cat((output1, output2), 1)
-
-        # pass the concatenation to the linear layers
-        # output = self.fc(output)
         
         return predicted_edit_distance
  
@@ -280,16 +269,15 @@ torch.manual_seed(295)
 # Define the shuffled indices. 
 shuffled_indices = simple_tweetyclr.shuffled_indices
 
-
 # The below two lines are used for the "a priori" shuffling procedure. The model is able to train with this "a priori" shuffling procedure 
 # stacked_windows = simple_tweetyclr.stacked_windows[shuffled_indices,:]
 # labels = simple_tweetyclr.stacked_labels_for_window[shuffled_indices, :]
 
 # Redefining the data 
 stacked_windows = simple_tweetyclr.stacked_windows.copy()
-# stacked_windows = stacked_windows[0:4,:]
+# stacked_windows = stacked_windows[0:4,:] # Debugging purposes
 labels = simple_tweetyclr.stacked_labels_for_window.copy()
-# labels = labels[0:4,:]
+# labels = labels[0:4,:] # Debugging purposes
 
 # In[15]: I want to define a method that will select the pairs that will be passed into the Siamese Network
 
@@ -300,6 +288,9 @@ class SiameseDataset(Dataset):
         self.data = data
         
     def calculate_edit_distance(self, x1, x2):
+        '''
+        Calculates the ground truth edit distance between two spectrogram slices
+        '''
         label1 = x1[1]
         label2 = x2[1]
         
@@ -309,17 +300,23 @@ class SiameseDataset(Dataset):
         return dist
 
     def __getitem__(self, index):
+        '''
+        For each spectrogram slice in the batch I will randomly select another spectrogram slice from the dataset as its pair. 
+        '''
         # Select the first item of the pair
         x1 = self.data[index]
 
         # Randomly select the second item of the pair
         idx2 = random.randint(0, len(self.data) - 1)
+        
+        # Ensure that the same spectrogram slice is not selected as its pair (not necessary)
         while idx2 == index:
             idx2 = random.randint(0, len(self.data) - 1)
         x2 = self.data[idx2]
         
         target = self.calculate_edit_distance(x1, x2)
 
+        # Returns the two images and the ground truth edit distance between them. 
         return x1, x2, target
 
     def __len__(self):
@@ -340,7 +337,6 @@ a = next(iter(siamese_dataset)) # ONe example
 train_perc = 0.8 #
 train_size = int(train_perc * len(dataset))  # (100*train_perc)% for training
 test_size = len(dataset) - train_size  # 100 - (100*train_perc)% for testing
-
 
 from torch.utils.data import random_split
 
@@ -374,10 +370,6 @@ for epoch in np.arange(num_epochs):
         loss = criterion(outputs, targets)
         loss.backward()
         optimizer.step()
-        # print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
-        #     epoch, batch_idx * len(images_1), len(train_loader.dataset),
-        #     100. * batch_idx / len(train_loader), loss.item()))
-        # batch_loss_train += loss.item()
     print(f'Epoch: {epoch}, Training Loss = {loss.item()}')
     epoch_loss.append(batch_loss_train)
         
