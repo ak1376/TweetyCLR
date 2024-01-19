@@ -358,27 +358,49 @@ model.to(device)
 num_epochs = 1000
 
 model.train()
-epoch_loss = []
+epoch_loss_train = []
+epoch_loss_test = []
 targets_list = []
 for epoch in np.arange(num_epochs):
     batch_loss_train = 0
     for batch_idx, (images_1, images_2, targets) in enumerate(train_loader):
         image_1, label_1, image_2, label_2, targets = images_1[0].to(device, dtype = torch.float32), images_1[1].to(device,  dtype = torch.float32), images_2[0].to(device,  dtype = torch.float32), images_2[1].to(device,  dtype = torch.float32), targets.to(device)
-        targets_list.append(targets.item())
+        # targets_list.append(targets.item())
         optimizer.zero_grad()
         outputs = model(image_1, image_2)
         loss = criterion(outputs, targets)
+        batch_loss_train+=loss.item()
         loss.backward()
-        optimizer.step()
-    print(f'Epoch: {epoch}, Training Loss = {loss.item()}')
-    epoch_loss.append(batch_loss_train)
+        optimizer.step()  
         
+    model.eval()
+    batch_loss_test = 0
+    for batch_idx, (images_1, images_2, targets_test) in enumerate(test_loader):
+        image_1, label_1, image_2, label_2, targets_test = images_1[0].to(device, dtype = torch.float32), images_1[1].to(device,  dtype = torch.float32), images_2[0].to(device,  dtype = torch.float32), images_2[1].to(device,  dtype = torch.float32), targets_test.to(device)
+        outputs_test = model(image_1, image_2)
+        validation_loss = criterion(outputs_test, targets_test)
+        batch_loss_test+=validation_loss.item()
+        
+    epoch_loss_train.append(batch_loss_train/len(train_loader))
+    epoch_loss_test.append(batch_loss_test/len(test_loader))
+    print(f'Epoch: {epoch}, Training Loss = {epoch_loss_train[-1]}, Validation Loss = {epoch_loss_test[-1]}')
+        
+epoch_loss_train_arr = np.array(epoch_loss_train)
+epoch_loss_test_arr = np.array(epoch_loss_test)
+
 plt.figure()
-plt.plot(epoch_loss)
-plt.xlabel("Epoch")   
-plt.ylabel("Loss")
+plt.plot(np.log(epoch_loss_train_arr + 1e-5), label = 'Train Loss')
+plt.plot(np.log(epoch_loss_test_arr + 1e-5), label = 'Validation Loss')
+plt.axhline(np.log(1e-5), color = 'red', linestyle = '--', label = 'Lowest Possible Loss')
+plt.legend()
+plt.title("Loss Curve")
+plt.xlabel("Epoch")
+plt.ylabel("log(loss + 1e-5)")
 plt.savefig(f'{folder_name}/loss_curve.png')
 plt.show()
+
+
+
 
 
 
