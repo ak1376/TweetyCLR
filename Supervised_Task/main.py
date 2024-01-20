@@ -154,16 +154,16 @@ batch_size = 1
 total_dataloader = DataLoader(total_dataset, batch_size=batch_size , shuffle=False)
 
 # Creating the hover images in the Bokeh plot
-list_of_images = []
-for batch_idx, (data) in enumerate(total_dataloader):
-    data = data[0]
+# list_of_images = []
+# for batch_idx, (data) in enumerate(total_dataloader):
+#     data = data[0]
 
-    for image in data:
-        list_of_images.append(image)
+#     for image in data:
+#         list_of_images.append(image)
 
-list_of_images = [tensor.numpy() for tensor in list_of_images]
+# list_of_images = [tensor.numpy() for tensor in list_of_images]
 
-embeddable_images = simple_tweetyclr.get_images(list_of_images)
+# embeddable_images = simple_tweetyclr.get_images(list_of_images)
 
 # simple_tweetyclr.plot_UMAP_embedding(embed, simple_tweetyclr.mean_colors_per_minispec, embeddable_images, f'{simple_tweetyclr.folder_name}/Plots/UMAP_of_specs_with_labels.html', saveflag = True)
 
@@ -275,9 +275,23 @@ shuffled_indices = simple_tweetyclr.shuffled_indices
 
 # Redefining the data 
 stacked_windows = simple_tweetyclr.stacked_windows.copy()
-# stacked_windows = stacked_windows[0:4,:] # Debugging purposes
+# stacked_windows = stacked_windows[0:2,:] # Debugging purposes
 labels = simple_tweetyclr.stacked_labels_for_window.copy()
-# labels = labels[0:4,:] # Debugging purposes
+# labels = labels[0:2,:] # Debugging purposes
+
+# Let's Z-Score the stacked_windows
+
+# Calculate the mean and standard deviation for each row
+mean_per_row = np.mean(stacked_windows, axis=1, keepdims=True)
+std_per_row = np.std(stacked_windows, axis=1, ddof=1, keepdims=True)
+
+# Perform Z-score normalization per row
+z_scored_arr = (stacked_windows - mean_per_row) / std_per_row
+
+# Replace NaNs resulting from zero division with 0s (if std is zero)
+z_scored_arr[np.isnan(z_scored_arr)] = 0
+
+stacked_windows = z_scored_arr.copy()
 
 # In[15]: I want to define a method that will select the pairs that will be passed into the Siamese Network
 
@@ -334,7 +348,7 @@ a = next(iter(siamese_dataset)) # ONe example
 
 # Split the dataset into a training and testing dataset
 # Define the split sizes -- what is the train test split ? 
-train_perc = 0.8 #
+train_perc = 0.5 #
 train_size = int(train_perc * len(dataset))  # (100*train_perc)% for training
 test_size = len(dataset) - train_size  # 100 - (100*train_perc)% for testing
 
@@ -380,7 +394,9 @@ for epoch in np.arange(num_epochs):
         outputs_test = model(image_1, image_2)
         validation_loss = criterion(outputs_test, targets_test)
         batch_loss_test+=validation_loss.item()
-        
+    
+    # epoch_loss_train.append(batch_loss_train)
+    # epoch_loss_test.append(batch_loss_test)
     epoch_loss_train.append(batch_loss_train/len(train_loader))
     epoch_loss_test.append(batch_loss_test/len(test_loader))
     print(f'Epoch: {epoch}, Training Loss = {epoch_loss_train[-1]}, Validation Loss = {epoch_loss_test[-1]}')
