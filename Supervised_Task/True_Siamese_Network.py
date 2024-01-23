@@ -57,9 +57,9 @@ analysis_path = f'{filepath}/Dropbox (University of Oregon)/Kapoor_Ananya/01_Pro
 # analysis_path = '/home/akapoor/Dropbox (University of Oregon)/Kapoor_Ananya/01_Projects/01_b_Canary_SSL/TweetyCLR_Repo/'
 
 # # Parameters we set
-num_spec = 80
+num_spec = 800
 window_size = 100
-stride = 10
+stride = 50
 
 # Define the folder name
 
@@ -122,7 +122,7 @@ stacked_windows.shape = (stacked_windows.shape[0], 100*151)
 
 # Set up a base dataloader (which we won't directly use for modeling). Also define the batch size of interest
 total_dataset = TensorDataset(torch.tensor(simple_tweetyclr.stacked_windows.reshape(simple_tweetyclr.stacked_windows.shape[0], 1, 100, 151)))
-batch_size = 64
+batch_size = 256
 total_dataloader = DataLoader(total_dataset, batch_size=batch_size , shuffle=False)
 
 import torch
@@ -154,6 +154,17 @@ class Encoder(nn.Module):
         self.bn8 = nn.BatchNorm2d(24)
         self.bn9 = nn.BatchNorm2d(24)
         self.bn10 = nn.BatchNorm2d(16)
+        
+        self.ln1 = nn.LayerNorm([8, 100, 151])
+        self.ln2 = nn.LayerNorm([8, 50, 76])
+        self.ln3 = nn.LayerNorm([16, 50, 76])
+        self.ln4 = nn.LayerNorm([16, 25, 38])
+        self.ln5 = nn.LayerNorm([24, 25, 38])
+        self.ln6 = nn.LayerNorm([24, 13, 19])
+        self.ln7 = nn.LayerNorm([32, 13, 19])
+        self.ln8 = nn.LayerNorm([24, 7, 10])
+        self.ln9 = nn.LayerNorm([24, 7, 10])
+        self.ln10 = nn.LayerNorm([16, 4, 5])
 
         self.relu = nn.ReLU(inplace = True)
         self.sigmoid = nn.Sigmoid()
@@ -163,6 +174,8 @@ class Encoder(nn.Module):
             nn.ReLU(inplace=True), 
             nn.Linear(256, 1)
         )  
+        
+        self.dropout = nn.Dropout(p=0.5)
         
         # Initialize convolutional layers with He initialization
         self._initialize_weights()
@@ -176,6 +189,7 @@ class Encoder(nn.Module):
 
     def forward_once(self, x):
 
+        # No BatchNorm
         # x = F.relu((self.conv1(x)))
         # x = F.relu((self.conv2(x)))
         # x = F.relu((self.conv3(x)))
@@ -187,17 +201,41 @@ class Encoder(nn.Module):
         # x = F.relu((self.conv9(x)))
         # x = F.relu((self.conv10(x)))
 
-    
-        x = self.relu(self.bn1(self.conv1(x)))
-        x = self.relu(self.bn2(self.conv2(x)))
-        x = self.relu(self.bn3(self.conv3(x)))
-        x = self.relu(self.bn4(self.conv4(x)))
-        x = self.relu(self.bn5(self.conv5(x)))
-        x = self.relu(self.bn6(self.conv6(x)))
-        x = self.relu(self.bn7(self.conv7(x)))
-        x = self.relu(self.bn8(self.conv8(x)))
-        x = self.relu(self.bn9(self.conv9(x)))
-        x = self.relu(self.bn10(self.conv10(x)))
+        # BatchNorm 
+        # x = self.relu(self.bn1(self.conv1(x)))
+        # x = self.relu(self.bn2(self.conv2(x)))
+        # x = self.relu(self.bn3(self.conv3(x)))
+        # x = self.relu(self.bn4(self.conv4(x)))
+        # x = self.relu(self.bn5(self.conv5(x)))
+        # x = self.relu(self.bn6(self.conv6(x)))
+        # x = self.relu(self.bn7(self.conv7(x)))
+        # x = self.relu(self.bn8(self.conv8(x)))
+        # x = self.relu(self.bn9(self.conv9(x)))
+        # x = self.relu(self.bn10(self.conv10(x)))
+        
+        # LayerNorm
+        # x = (self.relu(self.ln1(self.conv1(x))))
+        # x = (self.relu(self.ln2(self.conv2(x))))
+        # x = (self.relu(self.ln3(self.conv3(x))))
+        # x = (self.relu(self.ln4(self.conv4(x))))
+        # x = (self.relu(self.ln5(self.conv5(x))))
+        # x = (self.relu(self.ln6(self.conv6(x))))
+        # x = (self.relu(self.ln7(self.conv7(x))))
+        # x = (self.relu(self.ln8(self.conv8(x))))
+        # x = (self.relu(self.ln9(self.conv9(x))))
+        # x = (self.relu(self.ln10(self.conv10(x))))
+        
+        # LayerNorm + Dropout
+        x = self.dropout(self.relu(self.ln1(self.conv1(x))))
+        x = self.dropout(self.relu(self.ln2(self.conv2(x))))
+        x = self.dropout(self.relu(self.ln3(self.conv3(x))))
+        x = self.dropout(self.relu(self.ln4(self.conv4(x))))
+        x = self.dropout(self.relu(self.ln5(self.conv5(x))))
+        x = self.dropout(self.relu(self.ln6(self.conv6(x))))
+        x = self.dropout(self.relu(self.ln7(self.conv7(x))))
+        x = self.dropout(self.relu(self.ln8(self.conv8(x))))
+        x = self.dropout(self.relu(self.ln9(self.conv9(x))))
+        x = self.dropout(self.relu(self.ln10(self.conv10(x))))
 
         x_flattened = x.view(-1, 320)
         
@@ -236,8 +274,30 @@ class APP_MATCHER(Dataset):
         self.dataset = all_features
         self.targets = all_targets
         self.data = all_features.clone()
-
+        
+        self.total_indices = np.arange(len(self.dataset))
         self.group_examples()
+        self.index_to_corresponding_indices = self._create_index_map()
+        self.different_class_indices = self._create_different_labels_map()
+
+    def _create_index_map(self):
+        index_map = {}
+        for key, indices in self.final_dict.items():
+            for index in indices:
+                index_map[index] = indices
+        return index_map
+    
+    def _create_different_labels_map(self):
+        
+        different_labels_map = {}
+    
+        all_indices = set(range(len(self.dataset)))
+        for key, indices in self.final_dict.items():
+            different_label_indices = list(all_indices - set(indices))
+            for index in indices:
+                different_labels_map[index] = different_label_indices
+    
+        return different_labels_map
         
     def group_examples(self):
         """
@@ -282,6 +342,7 @@ class APP_MATCHER(Dataset):
         
         self.final_dict = final_dict
         
+        
     def __len__(self):
         return self.data.shape[0]
     
@@ -297,68 +358,49 @@ class APP_MATCHER(Dataset):
         # Choose a random row of the targets array and extract out the labels
         # in that row
         
-        random_index = np.random.choice(np.arange(len(np.array(self.dataset))))
+        random_index = random.randint(0, len(self.dataset) - 1)
+
         
         # Let's extract a spectrogram slice with the same collection of labels
         # Finding the key corresponding to the given index
-        for key, indices in self.final_dict.items():
-            if index in indices:
-                corresponding_key = key
-                corresponding_indices = indices
-                break
-            
-        index_1 = np.random.choice(corresponding_indices) # This is our anchor
+        corresponding_indices = self.index_to_corresponding_indices[index]
+
+        index_1 = random.choice(corresponding_indices) # This is our anchor
         
         image_1 = self.dataset[index_1,:]
         
         # same class
         if index % 2 == 0:
-            index_2 = np.random.choice(corresponding_indices)
-            
-            if len(corresponding_indices) == 1:
-                index_2 = index_1
-            # else:
-            #     while index_2 == index_1:
-            #         index_2 = np.random.choice(corresponding_indices)
-            
+            # Optimized logic for selecting index_2
+            index_2 = index_1
+            if len(corresponding_indices) > 1:
+                index_2 = random.choice([i for i in corresponding_indices if i != index_1])
+
             image_2 = self.dataset[index_2,:]
-            
             target = torch.tensor(1, dtype=torch.float)
 
-            
         else:
- 
-            # Now let's extract a spectrogram slice with a different label
-            total_indices = np.arange(len(self.dataset))
-            indices_of_different_labels = np.setdiff1d(total_indices, corresponding_indices)
-            
-            index_2 = np.random.choice(indices_of_different_labels)
-            
+            # Optimized different label selection (assuming precomputed mapping)
+            indices_of_different_labels = self.different_class_indices[index]
+            index_2 = random.choice(indices_of_different_labels)
             image_2 = self.dataset[index_2,:]
-            
             target = torch.tensor(0, dtype=torch.float)
-            
-         
+
         indices_list = torch.tensor([index_1, index_2])
          
-            
         return image_1, image_2, target, indices_list
-
-stacked_dataset = torch.tensor(simple_tweetyclr.stacked_windows)
-targets = torch.tensor(simple_tweetyclr.stacked_labels_for_window)
-
+    
 # Convert the dataset and targets into a torch dataset from which we can easily divide into training and testing
 
-dataset = TensorDataset(stacked_dataset, targets)
+dataset = TensorDataset(torch.tensor(simple_tweetyclr.stacked_windows), torch.tensor(simple_tweetyclr.stacked_labels_for_window))
 
 # Split the dataset into a training and testing dataset
 # Define the split sizes -- what is the train test split ? 
-train_perc = 0.5 #
+train_perc = 0.8 #
 train_size = int(train_perc * len(dataset))  # (100*train_perc)% for training
 test_size = len(dataset) - train_size  # 100 - (100*train_perc)% for testing
 
 from torch.utils.data import random_split
-
 
 train_dataset, test_dataset = random_split(dataset, [train_size, test_size])
 
@@ -383,8 +425,13 @@ model.to(device)
 optimizer = optim.Adam(model.parameters(), lr=1e-3)
 criterion = nn.BCELoss()
 
-num_epochs = 100
+num_epochs = 500
+patience = 10  # Number of epochs to wait for improvement before stopping
+min_delta = 0.001  # Minimum change to qualify as an improvement
 
+best_val_loss = float('inf')
+epochs_no_improve = 0
+early_stop = False
 tic = time.time()
 training_epoch_loss = []
 validation_epoch_loss = []
@@ -404,18 +451,26 @@ for epoch in np.arange(num_epochs):
         optimizer.step()
         
     model.eval()
-    validation_loss = 0
-    for batch_idx, (images_1, images_2, targets, indices) in enumerate(test_loader):
-        images_1, images_2, targets = images_1.to(device, dtype = torch.float32), images_2.to(device, dtype = torch.float32), targets.to(device, dtype = torch.float32)
-        images_1 = images_1.reshape(images_1.shape[0], 100, 151).unsqueeze(1)
-        images_2 = images_2.reshape(images_2.shape[0], 100, 151).unsqueeze(1)
-        
-        outputs = model(images_1, images_2).squeeze()
-        loss = criterion(outputs, targets)
-        validation_loss+=loss.item()
+    with torch.no_grad():
+        validation_loss = 0
+        for batch_idx, (images_1, images_2, targets, indices) in enumerate(test_loader):
+            images_1, images_2, targets = images_1.to(device, dtype = torch.float32), images_2.to(device, dtype = torch.float32), targets.to(device, dtype = torch.float32)
+            images_1 = images_1.reshape(images_1.shape[0], 100, 151).unsqueeze(1)
+            images_2 = images_2.reshape(images_2.shape[0], 100, 151).unsqueeze(1)
+            
+            outputs = model(images_1, images_2).squeeze()
+            loss = criterion(outputs, targets)
+            validation_loss+=loss.item()
         
     training_epoch_loss.append(training_loss / len(train_loader))
     validation_epoch_loss.append(validation_loss / len(test_loader))
+    
+    # Check for improvement
+    if validation_epoch_loss[-1] < best_val_loss - min_delta:
+        best_val_loss = validation_epoch_loss[-1]
+        epochs_no_improve = 0
+    else:
+        epochs_no_improve += 1
     
     print(f'Epoch {epoch}, Training Loss: {training_epoch_loss[-1]}, Validation Loss {validation_epoch_loss[-1]}')
     
@@ -472,11 +527,35 @@ toc = time.time()
 print('========================')
 print(f'Total Time: {toc - tic}')       
         
+# Now I want to see the model representation
 
+model_rep = []
+total_dataset = TensorDataset(torch.tensor(simple_tweetyclr.stacked_windows.reshape(simple_tweetyclr.stacked_windows.shape[0], 1, 100, 151)), torch.tensor(simple_tweetyclr.stacked_labels_for_window))
 
+# total_dat = APP_MATCHER(total_dataset)
+# total_dataloader = torch.utils.data.DataLoader(total_dat, batch_size = batch_size, shuffle = shuffle_status)
+model = model.to('cpu')
+model.eval()
+with torch.no_grad():
+    for batch_idx, data in enumerate(total_dataloader):
+        data = data[0]
+        data = data.to(torch.float32)
+        output = model.module.forward_once(data)
+        model_rep.append(output.numpy())
 
+model_rep_stacked = np.concatenate((model_rep))
 
+import umap
+reducer = umap.UMAP(random_state=295) # For consistency
+embed = reducer.fit_transform(model_rep_stacked)
 
+plt.figure()
+plt.scatter(embed[:,0], embed[:,1], c = simple_tweetyclr.mean_colors_per_minispec)
+plt.xlabel("UMAP 1")
+plt.ylabel("UMAP 2")
+plt.title("UMAP of the Representation Layer")
+plt.show()
+plt.savefig(f'{folder_name}/UMAP_rep_of_model.png')
 
 
 
