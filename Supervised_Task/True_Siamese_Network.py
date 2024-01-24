@@ -122,7 +122,7 @@ stacked_windows.shape = (stacked_windows.shape[0], 100*151)
 
 # Set up a base dataloader (which we won't directly use for modeling). Also define the batch size of interest
 total_dataset = TensorDataset(torch.tensor(simple_tweetyclr.stacked_windows.reshape(simple_tweetyclr.stacked_windows.shape[0], 1, 100, 151)))
-batch_size = 256
+batch_size = 1000
 total_dataloader = DataLoader(total_dataset, batch_size=batch_size , shuffle=False)
 
 import torch
@@ -421,6 +421,18 @@ if torch.cuda.device_count() > 1:
 # Move the model to GPU
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model.to(device)
+
+# =============================================================================
+# Load a PYtorch model from previous checkpoint
+# =============================================================================
+
+# Load the checkpoint
+checkpoint = torch.load('/home/akapoor/Dropbox (University of Oregon)/Kapoor_Ananya/01_Projects/01_b_Canary_SSL/TweetyCLR_End_to_End/Supervised_Task/Num_Spectrograms_800_Window_Size_100_Stride_50/Siamese_1/model_state_dict_epoch_273.pth')
+
+# Load the state dictionary into the model
+model.load_state_dict(checkpoint)
+
+
         
 optimizer = optim.Adam(model.parameters(), lr=1e-3)
 criterion = nn.BCELoss()
@@ -459,7 +471,8 @@ for epoch in np.arange(num_epochs):
             images_2 = images_2.reshape(images_2.shape[0], 100, 151).unsqueeze(1)
             
             outputs = model(images_1, images_2).squeeze()
-            loss = criterion(outputs, targets)
+           model.load_state_dict(checkpoint['model_state_dict'])
+ loss = criterion(outputs, targets)
             validation_loss+=loss.item()
         
     training_epoch_loss.append(training_loss / len(train_loader))
@@ -469,6 +482,8 @@ for epoch in np.arange(num_epochs):
     if validation_epoch_loss[-1] < best_val_loss - min_delta:
         best_val_loss = validation_epoch_loss[-1]
         epochs_no_improve = 0
+        torch.save(model.state_dict(), f'{folder_name}/model_state_dict_epoch_{epoch}.pth')
+
     else:
         epochs_no_improve += 1
     
@@ -556,6 +571,20 @@ plt.ylabel("UMAP 2")
 plt.title("UMAP of the Representation Layer")
 plt.show()
 plt.savefig(f'{folder_name}/UMAP_rep_of_model.png')
+
+# Bokeh Plot
+list_of_images = []
+for batch_idx, (data) in enumerate(total_dataloader):
+    data = data[0]
+    
+    for image in data:
+        list_of_images.append(image)
+        
+list_of_images = [tensor.numpy() for tensor in list_of_images]
+
+embeddable_images = simple_tweetyclr.get_images(list_of_images)
+
+simple_tweetyclr.plot_UMAP_embedding(embed, simple_tweetyclr.mean_colors_per_minispec,embeddable_images, f'{simple_tweetyclr.folder_name}/Plots/UMAP_Analysis.html', saveflag = True)
 
 
 
