@@ -14,6 +14,7 @@ I will be using this code as reference: https://github.com/pytorch/examples/blob
 @author: akapoor
 """
 
+
 import numpy as np
 import torch
 import sys
@@ -57,9 +58,9 @@ analysis_path = f'{filepath}/Dropbox (University of Oregon)/Kapoor_Ananya/01_Pro
 # analysis_path = '/home/akapoor/Dropbox (University of Oregon)/Kapoor_Ananya/01_Projects/01_b_Canary_SSL/TweetyCLR_Repo/'
 
 # # Parameters we set
-num_spec = 800
+num_spec = 80
 window_size = 100
-stride = 50
+stride = 10
 
 # Define the folder name
 
@@ -122,7 +123,7 @@ stacked_windows.shape = (stacked_windows.shape[0], 100*151)
 
 # Set up a base dataloader (which we won't directly use for modeling). Also define the batch size of interest
 total_dataset = TensorDataset(torch.tensor(simple_tweetyclr.stacked_windows.reshape(simple_tweetyclr.stacked_windows.shape[0], 1, 100, 151)))
-batch_size = 1000
+batch_size = 128
 total_dataloader = DataLoader(total_dataset, batch_size=batch_size , shuffle=False)
 
 import torch
@@ -166,13 +167,17 @@ class Encoder(nn.Module):
         self.ln9 = nn.LayerNorm([24, 7, 10])
         self.ln10 = nn.LayerNorm([16, 4, 5])
 
-        self.relu = nn.ReLU(inplace = True)
+        self.relu = nn.ReLU(inplace = False)
         self.sigmoid = nn.Sigmoid()
         
+        # self.fc = nn.Sequential(
+        #     nn.Linear(320, 256),
+        #     nn.ReLU(inplace=True), 
+        #     nn.Linear(256, 1)
+        # )  
         self.fc = nn.Sequential(
-            nn.Linear(640, 256),
-            nn.ReLU(inplace=True), 
-            nn.Linear(256, 1)
+            nn.Linear(320, 256),
+            nn.ReLU(inplace=False), 
         )  
         
         self.dropout = nn.Dropout(p=0.5)
@@ -241,23 +246,15 @@ class Encoder(nn.Module):
         
         return x_flattened
     
-    def forward(self, input1, input2):
+    def forward(self, anchor_img, positive_img, negative_img):
         
         # Pass the two spectrogram slices through a convolutional frontend to get a representation for each slice
         
-        output1 = self.forward_once(input1)
-        output2 = self.forward_once(input2)
+        anchor_emb = self.relu(self.fc(self.forward_once(anchor_img)))
+        positive_emb = self.relu(self.fc(self.forward_once(positive_img)))
+        negative_emb = self.relu(self.fc(self.forward_once(negative_img)))
         
-        # concatenate both images' features
-        output = torch.cat((output1, output2), 1)
-
-        # pass the concatenation to the linear layers
-        output = self.fc(output)
-
-        # pass the out of the linear layers to sigmoid layer
-        output = self.sigmoid(output)
-        
-        return output
+        return anchor_emb, positive_emb, negative_emb
     
 class APP_MATCHER(Dataset):
     def __init__(self, dataset):
@@ -358,37 +355,29 @@ class APP_MATCHER(Dataset):
         # Choose a random row of the targets array and extract out the labels
         # in that row
         
-        random_index = random.randint(0, len(self.dataset) - 1)
-
+        anchor_img = self.dataset[index,:]
         
-        # Let's extract a spectrogram slice with the same collection of labels
-        # Finding the key corresponding to the given index
+# =============================================================================
+#         Positive Sample
+# =============================================================================
+        
         corresponding_indices = self.index_to_corresponding_indices[index]
-
-        index_1 = random.choice(corresponding_indices) # This is our anchor
+        index_1 = random.choice(corresponding_indices) # This is our positive sample
+        positive_img = self.dataset[index_1,:]
         
-        image_1 = self.dataset[index_1,:]
         
-        # same class
-        if index % 2 == 0:
-            # Optimized logic for selecting index_2
-            index_2 = index_1
-            if len(corresponding_indices) > 1:
-                index_2 = random.choice([i for i in corresponding_indices if i != index_1])
+# =============================================================================
+#         Negative Sample
+# =============================================================================
 
-            image_2 = self.dataset[index_2,:]
-            target = torch.tensor(1, dtype=torch.float)
+        # Optimized different label selection (assuming precomputed mapping)
+        indices_of_different_labels = self.different_class_indices[index]
+        index_2 = random.choice(indices_of_different_labels)
+        negative_img = self.dataset[index_2,:]
 
-        else:
-            # Optimized different label selection (assuming precomputed mapping)
-            indices_of_different_labels = self.different_class_indices[index]
-            index_2 = random.choice(indices_of_different_labels)
-            image_2 = self.dataset[index_2,:]
-            target = torch.tensor(0, dtype=torch.float)
-
-        indices_list = torch.tensor([index_1, index_2])
+        indices_list = torch.tensor([index, index_1, index_2])
          
-        return image_1, image_2, target, indices_list
+        return anchor_img, positive_img, negative_img, indices_list
     
 # Convert the dataset and targets into a torch dataset from which we can easily divide into training and testing
 
@@ -420,24 +409,25 @@ if torch.cuda.device_count() > 1:
 
 # Move the model to GPU
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model.to(device)
+model.to(device).to(torch.float32)
 
 # =============================================================================
 # Load a PYtorch model from previous checkpoint
 # =============================================================================
 
-# Load the checkpoint
-checkpoint = torch.load('/home/akapoor/Dropbox (University of Oregon)/Kapoor_Ananya/01_Projects/01_b_Canary_SSL/TweetyCLR_End_to_End/Supervised_Task/Num_Spectrograms_800_Window_Size_100_Stride_50/Siamese_1/model_state_dict_epoch_273.pth')
+# # Load the checkpoint
+# checkpoint = torch.load('/home/akapoor/Dropbox (University of Oregon)/Kapoor_Ananya/01_Projects/01_b_Canary_SSL/TweetyCLR_End_to_End/Supervised_Task/Num_Spectrograms_800_Window_Size_100_Stride_50/Siamese_1/model_state_dict_epoch_273.pth')
 
-# Load the state dictionary into the model
-model.load_state_dict(checkpoint)
+# # Load the state dictionary into the model
+# model.load_state_dict(checkpoint)
 
 
         
 optimizer = optim.Adam(model.parameters(), lr=1e-3)
-criterion = nn.BCELoss()
+criterion = nn.TripletMarginLoss(margin=1.0, p=2)
 
-num_epochs = 500
+
+num_epochs = 100
 patience = 10  # Number of epochs to wait for improvement before stopping
 min_delta = 0.001  # Minimum change to qualify as an improvement
 
@@ -450,14 +440,16 @@ validation_epoch_loss = []
 for epoch in np.arange(num_epochs):
     model.train()
     training_loss = 0
-    for batch_idx, (images_1, images_2, targets, indices) in enumerate(train_loader):
-        images_1, images_2, targets = images_1.to(device, dtype = torch.float32), images_2.to(device, dtype = torch.float32), targets.to(device, dtype = torch.float32)
-        images_1 = images_1.reshape(images_1.shape[0], 100, 151).unsqueeze(1)
-        images_2 = images_2.reshape(images_2.shape[0], 100, 151).unsqueeze(1)
+    for batch_idx, (anchor_img, positive_img, negative_img, indices)in enumerate(train_loader):
+        anchor_img, positive_img, negative_img = anchor_img.to(device, dtype = torch.float32), positive_img.to(device, dtype = torch.float32), negative_img.to(device, dtype = torch.float32)
+        anchor_img = anchor_img.reshape(anchor_img.shape[0], 100, 151).unsqueeze(1).to(torch.float32)
+        positive_img = positive_img.reshape(positive_img.shape[0], 100, 151).unsqueeze(1).to(torch.float32)
+        negative_img = negative_img.reshape(negative_img.shape[0], 100, 151).unsqueeze(1).to(torch.float32)
+
         
         optimizer.zero_grad()
-        outputs = model(images_1, images_2).squeeze()
-        loss = criterion(outputs, targets.squeeze())
+        anchor_emb, positive_emb, negative_emb = model(anchor_img, positive_img, negative_img)
+        loss = criterion(anchor_emb, positive_emb, negative_emb)
         training_loss+=loss.item()
         loss.backward()
         optimizer.step()
@@ -465,14 +457,12 @@ for epoch in np.arange(num_epochs):
     model.eval()
     with torch.no_grad():
         validation_loss = 0
-        for batch_idx, (images_1, images_2, targets, indices) in enumerate(test_loader):
-            images_1, images_2, targets = images_1.to(device, dtype = torch.float32), images_2.to(device, dtype = torch.float32), targets.to(device, dtype = torch.float32)
-            images_1 = images_1.reshape(images_1.shape[0], 100, 151).unsqueeze(1)
-            images_2 = images_2.reshape(images_2.shape[0], 100, 151).unsqueeze(1)
-            
-            outputs = model(images_1, images_2).squeeze()
-           model.load_state_dict(checkpoint['model_state_dict'])
- loss = criterion(outputs, targets)
+        for batch_idx, (anchor_img, positive_img, negative_img, indices) in enumerate(test_loader):
+            anchor_img = anchor_img.reshape(anchor_img.shape[0], 100, 151).unsqueeze(1).to(torch.float32)
+            positive_img = positive_img.reshape(positive_img.shape[0], 100, 151).unsqueeze(1).to(torch.float32)
+            negative_img = negative_img.reshape(negative_img.shape[0], 100, 151).unsqueeze(1).to(torch.float32)
+            anchor_emb, positive_emb, negative_emb = model(anchor_img, positive_img, negative_img)
+            loss = criterion(anchor_emb, positive_emb, negative_emb)
             validation_loss+=loss.item()
         
     training_epoch_loss.append(training_loss / len(train_loader))
@@ -585,8 +575,5 @@ list_of_images = [tensor.numpy() for tensor in list_of_images]
 embeddable_images = simple_tweetyclr.get_images(list_of_images)
 
 simple_tweetyclr.plot_UMAP_embedding(embed, simple_tweetyclr.mean_colors_per_minispec,embeddable_images, f'{simple_tweetyclr.folder_name}/Plots/UMAP_Analysis.html', saveflag = True)
-
-
-
 
 

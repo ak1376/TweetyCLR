@@ -8,6 +8,7 @@ UMAP analysis of canary song spectrogram slices. Instead of doing a UMAP analysi
 @author: AnanyaKapoor
 """
 
+
 import numpy as np
 import torch
 import sys
@@ -28,6 +29,9 @@ import itertools
 import inspect
 import torch.nn.init as init
 import random
+from torch.utils.data import Dataset
+from collections import defaultdict
+import time
 
 # Set random seeds for reproducibility 
 torch.manual_seed(295)
@@ -111,67 +115,10 @@ stacked_windows[:, :, :] = simple_tweetyclr.stacked_labels_for_window[:, :, None
 
 stacked_windows.shape = (stacked_windows.shape[0], 100*151) 
 
-# I want to use the Edit distance for UMAP decomposition. Need to write a custom function
-
-import numpy as np
-import numba
-@numba.njit()
-def custom_distance(x, y):
-    """
-    Calculate the custom distance metric equivalent to (labels[0,:] != labels[1,:]).sum() in PyTorch.
-
-    Parameters:
-    x, y (numpy arrays): Two label vectors to compare.
-
-    Returns:
-    float: The calculated distance.
-    """
-    # Ensure the inputs are NumPy arrays
-    x = np.asarray(x)
-    y = np.asarray(y)
-
-    # Calculate the number of different elements (equivalent to the original PyTorch expression)
-    distance = np.sum(x != y)
-
-    return float(distance)
-
-reducer = umap.UMAP(metric = custom_distance, random_state = 295)
-
-# Perform UMAP decomposition
-# embed = reducer.fit_transform(stacked_windows)
-
-# plt.figure()
-# plt.scatter(embed[:,0], embed[:,1], c = simple_tweetyclr.mean_colors_per_minispec)
-# plt.suptitle("UMAP Decomposition of Spectrograms Using Edit Distance Similarity")
-# plt.title(f'Number of Slices: {embed.shape[0]}')
-# plt.savefig(f'{simple_tweetyclr.folder_name}/Plots/umap_decomp_of_spec_slice_hamming.png')
-# plt.show()
-
-
 # Set up a base dataloader (which we won't directly use for modeling). Also define the batch size of interest
 total_dataset = TensorDataset(torch.tensor(simple_tweetyclr.stacked_windows.reshape(simple_tweetyclr.stacked_windows.shape[0], 1, 100, 151)))
 batch_size = 1
 total_dataloader = DataLoader(total_dataset, batch_size=batch_size , shuffle=False)
-
-# Creating the hover images in the Bokeh plot
-# list_of_images = []
-# for batch_idx, (data) in enumerate(total_dataloader):
-#     data = data[0]
-
-#     for image in data:
-#         list_of_images.append(image)
-
-# list_of_images = [tensor.numpy() for tensor in list_of_images]
-
-# embeddable_images = simple_tweetyclr.get_images(list_of_images)
-
-# simple_tweetyclr.plot_UMAP_embedding(embed, simple_tweetyclr.mean_colors_per_minispec, embeddable_images, f'{simple_tweetyclr.folder_name}/Plots/UMAP_of_specs_with_labels.html', saveflag = True)
-
-
-# In[14]: Let's create a siamese network to predict the edit distance
-
-# Question: is a model that is trained to match the batch pairwise edit 
-# distance conducive to good phrase representations? 
 
 import torch
 import torch.nn as nn
@@ -202,14 +149,28 @@ class Encoder(nn.Module):
         self.bn8 = nn.BatchNorm2d(24)
         self.bn9 = nn.BatchNorm2d(24)
         self.bn10 = nn.BatchNorm2d(16)
+        
+        self.ln1 = nn.LayerNorm([8, 100, 151])
+        self.ln2 = nn.LayerNorm([8, 50, 76])
+        self.ln3 = nn.LayerNorm([16, 50, 76])
+        self.ln4 = nn.LayerNorm([16, 25, 38])
+        self.ln5 = nn.LayerNorm([24, 25, 38])
+        self.ln6 = nn.LayerNorm([24, 13, 19])
+        self.ln7 = nn.LayerNorm([32, 13, 19])
+        self.ln8 = nn.LayerNorm([24, 7, 10])
+        self.ln9 = nn.LayerNorm([24, 7, 10])
+        self.ln10 = nn.LayerNorm([16, 4, 5])
 
         self.relu = nn.ReLU(inplace = True)
         self.sigmoid = nn.Sigmoid()
         
         self.fc = nn.Sequential(
-            nn.Linear(320, 256),
-            nn.ReLU(inplace=True)
+            nn.Linear(640, 256),
+            nn.ReLU(inplace=True), 
+            nn.Linear(256, 1)
         )  
+        
+        self.dropout = nn.Dropout(p=0.5)
         
         # Initialize convolutional layers with He initialization
         self._initialize_weights()
@@ -223,6 +184,7 @@ class Encoder(nn.Module):
 
     def forward_once(self, x):
 
+        # No BatchNorm
         # x = F.relu((self.conv1(x)))
         # x = F.relu((self.conv2(x)))
         # x = F.relu((self.conv3(x)))
@@ -234,226 +196,304 @@ class Encoder(nn.Module):
         # x = F.relu((self.conv9(x)))
         # x = F.relu((self.conv10(x)))
 
-    
-        x = self.relu(self.bn1(self.conv1(x)))
-        x = self.relu(self.bn2(self.conv2(x)))
-        x = self.relu(self.bn3(self.conv3(x)))
-        x = self.relu(self.bn4(self.conv4(x)))
-        x = self.relu(self.bn5(self.conv5(x)))
-        x = self.relu(self.bn6(self.conv6(x)))
-        x = self.relu(self.bn7(self.conv7(x)))
-        x = self.relu(self.bn8(self.conv8(x)))
-        x = self.relu(self.bn9(self.conv9(x)))
-        x = self.relu(self.bn10(self.conv10(x)))
+        # BatchNorm 
+        # x = self.relu(self.bn1(self.conv1(x)))
+        # x = self.relu(self.bn2(self.conv2(x)))
+        # x = self.relu(self.bn3(self.conv3(x)))
+        # x = self.relu(self.bn4(self.conv4(x)))
+        # x = self.relu(self.bn5(self.conv5(x)))
+        # x = self.relu(self.bn6(self.conv6(x)))
+        # x = self.relu(self.bn7(self.conv7(x)))
+        # x = self.relu(self.bn8(self.conv8(x)))
+        # x = self.relu(self.bn9(self.conv9(x)))
+        # x = self.relu(self.bn10(self.conv10(x)))
+        
+        # LayerNorm
+        # x = (self.relu(self.ln1(self.conv1(x))))
+        # x = (self.relu(self.ln2(self.conv2(x))))
+        # x = (self.relu(self.ln3(self.conv3(x))))
+        # x = (self.relu(self.ln4(self.conv4(x))))
+        # x = (self.relu(self.ln5(self.conv5(x))))
+        # x = (self.relu(self.ln6(self.conv6(x))))
+        # x = (self.relu(self.ln7(self.conv7(x))))
+        # x = (self.relu(self.ln8(self.conv8(x))))
+        # x = (self.relu(self.ln9(self.conv9(x))))
+        # x = (self.relu(self.ln10(self.conv10(x))))
+        
+        # LayerNorm + Dropout
+        x = self.dropout(self.relu(self.ln1(self.conv1(x))))
+        x = self.dropout(self.relu(self.ln2(self.conv2(x))))
+        x = self.dropout(self.relu(self.ln3(self.conv3(x))))
+        x = self.dropout(self.relu(self.ln4(self.conv4(x))))
+        x = self.dropout(self.relu(self.ln5(self.conv5(x))))
+        x = self.dropout(self.relu(self.ln6(self.conv6(x))))
+        x = self.dropout(self.relu(self.ln7(self.conv7(x))))
+        x = self.dropout(self.relu(self.ln8(self.conv8(x))))
+        x = self.dropout(self.relu(self.ln9(self.conv9(x))))
+        x = self.dropout(self.relu(self.ln10(self.conv10(x))))
 
         x_flattened = x.view(-1, 320)
         
         return x_flattened
-    
+
     def forward(self, input1, input2):
         
         # Pass the two spectrogram slices through a convolutional frontend to get a representation for each slice
         
-        output1 = self.fc(self.forward_once(input1))
-        output2 = self.fc(self.forward_once(input2))
+        output1 = self.forward_once(input1)
+        output2 = self.forward_once(input2)
         
-        # The predicted edit distance will be the sum(absolute element-wise difference) of both image representations
-        predicted_edit_distance = torch.abs(output1 - output2).sum(dim = 1).to(torch.float32) 
+        # concatenate both images' features
+        output = torch.cat((output1, output2), 1)
+
+        # pass the concatenation to the linear layers
+        output = self.fc(output)
+
+        # pass the out of the linear layers to sigmoid layer
+        output = self.relu(output)
         
-        return predicted_edit_distance
- 
-# Initialize random seeds for reproducibility.
-simple_tweetyclr.shuffling(295) # Helper function that randomizes the spectrogram slices 
-torch.manual_seed(295)
-
-# Define the shuffled indices. 
-shuffled_indices = simple_tweetyclr.shuffled_indices
-
-# The below two lines are used for the "a priori" shuffling procedure. The model is able to train with this "a priori" shuffling procedure 
-# stacked_windows = simple_tweetyclr.stacked_windows[shuffled_indices,:]
-# labels = simple_tweetyclr.stacked_labels_for_window[shuffled_indices, :]
-
-# Redefining the data 
-stacked_windows = simple_tweetyclr.stacked_windows.copy()
-# stacked_windows = stacked_windows[0:2,:] # Debugging purposes
-labels = simple_tweetyclr.stacked_labels_for_window.copy()
-# labels = labels[0:2,:] # Debugging purposes
-
-# Let's Z-Score the stacked_windows
-
-# Calculate the mean and standard deviation for each row
-mean_per_row = np.mean(stacked_windows, axis=1, keepdims=True)
-std_per_row = np.std(stacked_windows, axis=1, ddof=1, keepdims=True)
-
-# Perform Z-score normalization per row
-z_scored_arr = (stacked_windows - mean_per_row) / std_per_row
-
-# Replace NaNs resulting from zero division with 0s (if std is zero)
-z_scored_arr[np.isnan(z_scored_arr)] = 0
-
-stacked_windows = z_scored_arr.copy()
-
-# In[15]: I want to define a method that will select the pairs that will be passed into the Siamese Network
-
-from torch.utils.data import Dataset
-
-class SiameseDataset(Dataset):
-    def __init__(self, data):
-        self.data = data
-        
-    def calculate_edit_distance(self, x1, x2):
-        '''
-        Calculates the ground truth edit distance between two spectrogram slices
-        '''
-        label1 = x1[1]
-        label2 = x2[1]
-        
-        # This function calculates the edit distance
-        dist = (label1 != label2).sum().unsqueeze(0).to(torch.float32).sum()
-        
-        return dist
-
-    def __getitem__(self, index):
-        '''
-        For each spectrogram slice in the batch I will randomly select another spectrogram slice from the dataset as its pair. 
-        '''
-        # Select the first item of the pair
-        x1 = self.data[index]
-
-        # Randomly select the second item of the pair
-        idx2 = random.randint(0, len(self.data) - 1)
-        
-        # Ensure that the same spectrogram slice is not selected as its pair (not necessary)
-        while idx2 == index:
-            idx2 = random.randint(0, len(self.data) - 1)
-        x2 = self.data[idx2]
-        
-        target = self.calculate_edit_distance(x1, x2)
-
-        # Returns the two images and the ground truth edit distance between them. 
-        return x1, x2, target
-
-    def __len__(self):
-        return len(self.data)
+        return output
     
-# Creating the necessary structure for the dataset for analysis
-dataset = torch.tensor(stacked_windows.reshape(stacked_windows.shape[0], 1, 100, 151))
+class APP_MATCHER(Dataset):
+    def __init__(self, dataset):
+        super(APP_MATCHER, self).__init__()
+        
+        # Extracting all features and targets
+        all_features, all_targets = zip(*[dataset[i] for i in range(len(dataset))])
+        
+        # Converting lists of tensors to a single tensor
+        all_features = torch.stack(all_features)
+        all_targets = torch.stack(all_targets)
 
-dataset = TensorDataset(dataset, torch.tensor(labels))
+        
+        self.dataset = all_features
+        self.targets = all_targets
+        self.data = all_features.clone()
+        
+        self.total_indices = np.arange(len(self.dataset))
+        self.group_examples()
+        self.index_to_corresponding_indices = self._create_index_map()
+        self.different_class_indices = self._create_different_labels_map()
 
-# Initialize Dataset and DataLoader
-siamese_dataset = SiameseDataset(dataset)
+    def _create_index_map(self):
+        index_map = {}
+        for key, indices in self.final_dict.items():
+            for index in indices:
+                index_map[index] = indices
+        return index_map
+    
+    def _create_different_labels_map(self):
+        
+        different_labels_map = {}
+    
+        all_indices = set(range(len(self.dataset)))
+        for key, indices in self.final_dict.items():
+            different_label_indices = list(all_indices - set(indices))
+            for index in indices:
+                different_labels_map[index] = different_label_indices
+    
+        return different_labels_map
+        
+    def group_examples(self):
+        """
+        To ease the accessibility of data based on the class, we will use `group_examples` to group 
+        examples based on class. 
+        
+        Class definition here is the number of unique combinations of window labels. 
+        
+        This is a toy example, but for 72 spectrogram slices, there are 7 unique label combinations:
+            
+            1. [0, 29]
+            2. [0, 1, 29]
+            3. [0, 1]
+            4. [0, 1, 2]
+            5. [0, 2]
+            6. [0, 2, 11]
+            7. [0, 11]
+            
+        If I pick two spectrogram slices with the same unique label combination then I would want to represent them similarly. 
 
-a = next(iter(siamese_dataset)) # ONe example 
+        """
+
+        # get the targets from dataset
+        np_arr = np.array(self.targets.clone())
+        
+        # group examples based on class
+        self.grouped_examples = {}
+        
+        # For now I am going to implement on toy dataset
+        unique_labels_per_row = [np.unique(row) for row in np.array(self.targets)]
+        
+        # Creating a dictionary to store indices for each unique array
+        index_dict = defaultdict(list)
+        
+        for i, arr in enumerate(unique_labels_per_row):
+            index_dict[tuple(arr)].append(i)
+        
+        # Converting tuples back to arrays in the dictionary keys
+        final_dict = {key: value for key, value in index_dict.items()}
+        
+        lengths = [len(value) for value in final_dict.values()]
+        
+        self.final_dict = final_dict
+        
+        
+    def __len__(self):
+        return self.data.shape[0]
+    
+    
+    def __getitem__(self, index):
+        ''' 
+        For the spectrogram slice corresponding to "index", I want to randomly
+        choose another spectrogram slice. If that randomly chosen spectrogram
+        slice has the same collection of labels then the pseudo-label will be
+        1. Otherwise, the pseudo-label will be 0
+        '''
+        
+        # Choose a random row of the targets array and extract out the labels
+        # in that row
+        
+        random_index = random.randint(0, len(self.dataset) - 1)
+
+        
+        # Let's extract a spectrogram slice with the same collection of labels
+        # Finding the key corresponding to the given index
+        corresponding_indices = self.index_to_corresponding_indices[index]
+
+        index_1 = random.choice(corresponding_indices) # This is our anchor
+        
+        image_1 = self.dataset[index_1,:]
+        label_1 = self.targets[index_1, :]
+        
+        # same class
+        if index % 2 == 0:
+            # Optimized logic for selecting index_2
+            index_2 = index_1
+            if len(corresponding_indices) > 1:
+                index_2 = random.choice([i for i in corresponding_indices if i != index_1])
+
+            image_2 = self.dataset[index_2,:]
+            
+            
+        else:
+            # Optimized different label selection (assuming precomputed mapping)
+            indices_of_different_labels = self.different_class_indices[index]
+            index_2 = random.choice(indices_of_different_labels)
+            image_2 = self.dataset[index_2,:]
+
+        label_2 = self.targets[index_2, :]
+        target = (label_1 != label_2).sum().unsqueeze(0).to(torch.float32).sum()
+        indices_list = torch.tensor([index_1, index_2])
+         
+        return image_1, image_2, target, indices_list
+    
+# Convert the dataset and targets into a torch dataset from which we can easily divide into training and testing
+
+stacked_windows = simple_tweetyclr.stacked_windows.copy()
+stacked_labels_for_window = simple_tweetyclr.stacked_labels_for_window.copy()
+
+dataset = TensorDataset(torch.tensor(simple_tweetyclr.stacked_windows), torch.tensor(simple_tweetyclr.stacked_labels_for_window))
+# dataset = TensorDataset(torch.tensor(stacked_windows), torch.tensor(stacked_labels_for_window))
 
 # Split the dataset into a training and testing dataset
 # Define the split sizes -- what is the train test split ? 
-train_perc = 0.5 #
+train_perc = 0.8 #
 train_size = int(train_perc * len(dataset))  # (100*train_perc)% for training
 test_size = len(dataset) - train_size  # 100 - (100*train_perc)% for testing
 
 from torch.utils.data import random_split
 
+train_dataset, test_dataset = random_split(dataset, [train_size, test_size])
 
-train_dataset, test_dataset = random_split(siamese_dataset, [train_size, test_size])
+train_dataset = APP_MATCHER(train_dataset)
+test_dataset = APP_MATCHER(test_dataset)
 
-shuffle_status = True # Dynamic shuffling within the dataloader 
+shuffle_status = True
 
-train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=shuffle_status)
-test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=shuffle_status)
+train_loader = torch.utils.data.DataLoader(train_dataset, batch_size = batch_size, shuffle = shuffle_status)
+test_loader = torch.utils.data.DataLoader(test_dataset, batch_size = batch_size, shuffle = shuffle_status)
 
 model = Encoder()
-optimizer = optim.Adam(model.parameters(), lr=1e-3)
-criterion = nn.MSELoss()  # MSE Loss
-# scheduler = StepLR(optimizer, step_size=30, gamma=0.1)
+# Check if multiple GPUs are available
+if torch.cuda.device_count() > 1:
+    print(f"Number of GPUs available: {torch.cuda.device_count()}")
+    model = nn.DataParallel(model)
 
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+# Move the model to GPU
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model.to(device)
-num_epochs = 1000
+    
+        
+optimizer = optim.Adam(model.parameters(), lr=1e-3)
+criterion = nn.MSELoss() 
 
-model.train()
-epoch_loss_train = []
-epoch_loss_test = []
-targets_list = []
+
+num_epochs = 100
+patience = 10  # Number of epochs to wait for improvement before stopping
+min_delta = 0.001  # Minimum change to qualify as an improvement
+
+best_val_loss = float('inf')
+epochs_no_improve = 0
+early_stop = False
+tic = time.time()
+training_epoch_loss = []
+validation_epoch_loss = []
 for epoch in np.arange(num_epochs):
-    batch_loss_train = 0
-    for batch_idx, (images_1, images_2, targets) in enumerate(train_loader):
-        image_1, label_1, image_2, label_2, targets = images_1[0].to(device, dtype = torch.float32), images_1[1].to(device,  dtype = torch.float32), images_2[0].to(device,  dtype = torch.float32), images_2[1].to(device,  dtype = torch.float32), targets.to(device)
-        # targets_list.append(targets.item())
+    model.train()
+    training_loss = 0
+    for batch_idx, (images_1, images_2, targets, indices) in enumerate(train_loader):
+        images_1, images_2, targets = images_1.to(device, dtype = torch.float32), images_2.to(device, dtype = torch.float32), targets.to(device, dtype = torch.float32)
+        images_1 = images_1.reshape(images_1.shape[0], 100, 151).unsqueeze(1)
+        images_2 = images_2.reshape(images_2.shape[0], 100, 151).unsqueeze(1)
+        
         optimizer.zero_grad()
-        outputs = model(image_1, image_2)
-        loss = criterion(outputs, targets)
-        batch_loss_train+=loss.item()
+        outputs = model(images_1, images_2).squeeze()
+        loss = criterion(outputs, targets.squeeze())
+        training_loss+=loss.item()
         loss.backward()
-        optimizer.step()  
+        optimizer.step()
         
     model.eval()
-    batch_loss_test = 0
-    for batch_idx, (images_1, images_2, targets_test) in enumerate(test_loader):
-        image_1, label_1, image_2, label_2, targets_test = images_1[0].to(device, dtype = torch.float32), images_1[1].to(device,  dtype = torch.float32), images_2[0].to(device,  dtype = torch.float32), images_2[1].to(device,  dtype = torch.float32), targets_test.to(device)
-        outputs_test = model(image_1, image_2)
-        validation_loss = criterion(outputs_test, targets_test)
-        batch_loss_test+=validation_loss.item()
-    
-    # epoch_loss_train.append(batch_loss_train)
-    # epoch_loss_test.append(batch_loss_test)
-    epoch_loss_train.append(batch_loss_train/len(train_loader))
-    epoch_loss_test.append(batch_loss_test/len(test_loader))
-    print(f'Epoch: {epoch}, Training Loss = {epoch_loss_train[-1]}, Validation Loss = {epoch_loss_test[-1]}')
+    with torch.no_grad():
+        validation_loss = 0
+        for batch_idx, (images_1, images_2, targets, indices) in enumerate(test_loader):
+            images_1, images_2, targets = images_1.to(device, dtype = torch.float32), images_2.to(device, dtype = torch.float32), targets.to(device, dtype = torch.float32)
+            images_1 = images_1.reshape(images_1.shape[0], 100, 151).unsqueeze(1)
+            images_2 = images_2.reshape(images_2.shape[0], 100, 151).unsqueeze(1)
+            outputs = model(images_1, images_2).squeeze()
+            loss = criterion(outputs, targets.squeeze())
+            validation_loss+=loss.item()
         
-epoch_loss_train_arr = np.array(epoch_loss_train)
-epoch_loss_test_arr = np.array(epoch_loss_test)
+    training_epoch_loss.append(training_loss / len(train_loader))
+    validation_epoch_loss.append(validation_loss / len(test_loader))
+    
+    # Check for improvement
+    if validation_epoch_loss[-1] < best_val_loss - min_delta:
+        best_val_loss = validation_epoch_loss[-1]
+        epochs_no_improve = 0
+        torch.save(model.state_dict(), f'{folder_name}/model_state_dict_epoch_{epoch}.pth')
 
+    else:
+        epochs_no_improve += 1
+    
+    print(f'Epoch {epoch}, Training Loss: {training_epoch_loss[-1]}, Validation Loss {validation_epoch_loss[-1]}')
+    
 plt.figure()
-plt.plot(np.log(epoch_loss_train_arr + 1e-5), label = 'Train Loss')
-plt.plot(np.log(epoch_loss_test_arr + 1e-5), label = 'Validation Loss')
-plt.axhline(np.log(1e-5), color = 'red', linestyle = '--', label = 'Lowest Possible Loss')
+plt.plot(training_epoch_loss, label = 'Training Loss')
+plt.plot(validation_epoch_loss, label = 'Validation Loss')
 plt.legend()
-plt.title("Loss Curve")
 plt.xlabel("Epoch")
-plt.ylabel("log(loss + 1e-5)")
+plt.ylabel("MSE Loss")
+plt.title("Supervised Training")
 plt.savefig(f'{folder_name}/loss_curve.png')
 plt.show()
 
+model_form = model.module
 
 
-
-
-
-# Let's save the parameters from this experiment (this will go in the utils
-# file later)
-
-# Here are the parameters I want to save:
-# 1. Data parameters: 
-    # a. Number of spectrograms for analysis
-    # b. Stride
-    # c. Window size
-    # d. Total number of spectrogram slices
-    # e. Whether any standardization was applied
-
-# 2. Model parameters: 
-    # a. Optimizer type and Learning rate
-    # b. Batch size 
-    # c. Number of epochs
-    # d. Random seed
-    # e. Accumulation? 
-    # f. Train/Test split? If so, what is the proportion?
-    # g. Model architecture & any regularlization. 
-    # h. Criterion
-    
-# data_params = {
-#     "Data_Directory": bird_dir,
-#     "Window_Size": simple_tweetyclr.window_size, 
-#     "Stride_Size": simple_tweetyclr.stride, 
-#     "Num_Spectrograms": simple_tweetyclr.num_spec, 
-#     "Total_Slices": simple_tweetyclr.stacked_windows.shape[0], 
-#     "Frequencies_of_Interest": masking_freq_tuple, 
-#     "Data_Standardization": "None"
-#     }
-
-model_arch = str(model)
-forward_method = inspect.getsource(model.forward)
-forward_once_method = inspect.getsource(model.forward_once)
+model_arch = str(model_form)
+forward_method = inspect.getsource(model_form.forward)
+forward_once_method = inspect.getsource(model_form.forward_once)
 
 # Splitting the string into an array of lines
 model_arch_lines = model_arch.split('\n')
@@ -486,35 +526,54 @@ import json
 with open(f'{simple_tweetyclr.folder_name}/experiment_params.json', 'w') as file:
     json.dump(experiment_params, file, indent=4)
 
-# model_rep = []
+toc = time.time()
 
-# model.eval()
-# with torch.no_grad():
-#     for i, (inputs, labels) in enumerate(total_dataloader):
-#         inputs = inputs.to(device, dtype=torch.float32)
-#         labels = labels.to(device, dtype=torch.float32)
+print('========================')
+print(f'Total Time: {toc - tic}')       
+        
+# Now I want to see the model representation
+
+model_rep = []
+total_dataset = TensorDataset(torch.tensor(simple_tweetyclr.stacked_windows.reshape(simple_tweetyclr.stacked_windows.shape[0], 1, 100, 151)), torch.tensor(simple_tweetyclr.stacked_labels_for_window))
+
+# total_dat = APP_MATCHER(total_dataset)
+# total_dataloader = torch.utils.data.DataLoader(total_dat, batch_size = batch_size, shuffle = shuffle_status)
+model = model.to('cpu')
+model.eval()
+with torch.no_grad():
+    for batch_idx, data in enumerate(total_dataloader):
+        data = data[0]
+        data = data.to(torch.float32)
+        output = model.module.forward_once(data)
+        model_rep.append(output.numpy())
+
+model_rep_stacked = np.concatenate((model_rep))
+
+import umap
+reducer = umap.UMAP(random_state=295) # For consistency
+embed = reducer.fit_transform(model_rep_stacked)
+np.save(f'{folder_name}/embedding.npy', embed)
+
+
+plt.figure()
+plt.scatter(embed[:,0], embed[:,1], c = simple_tweetyclr.mean_colors_per_minispec)
+plt.xlabel("UMAP 1")
+plt.ylabel("UMAP 2")
+plt.title("UMAP of the Representation Layer")
+plt.show()
+plt.savefig(f'{folder_name}/UMAP_rep_of_model.png')
+
+# Bokeh Plot
+list_of_images = []
+for batch_idx, (data) in enumerate(total_dataloader):
+    data = data[0]
     
-#         x = F.relu(model.bn1(model.conv1(inputs)))
-#         x = F.relu(model.bn2(model.conv2(x)))
-#         x = F.relu(model.bn3(model.conv3(x)))
-#         x = F.relu(model.bn4(model.conv4(x)))
-#         x = F.relu(model.bn5(model.conv5(x)))
-#         x = F.relu(model.bn6(model.conv6(x)))
-#         x = F.relu(model.bn7(model.conv7(x)))
-#         x = F.relu(model.bn8(model.conv8(x)))
-#         x = F.relu(model.bn9(model.conv9(x)))
-#         x = F.relu(model.bn10(model.conv10(x)))
-
-#         x_flattened = x.view(-1, 320)
-#         model_rep.append(x_flattened.clone().detach().numpy())
+    for image in data:
+        list_of_images.append(image)
         
-# model_rep1 = np.concatenate((model_rep))    
-        
-# Write the experiment information to a txt file 
+list_of_images = [tensor.numpy() for tensor in list_of_images]
 
+embeddable_images = simple_tweetyclr.get_images(list_of_images)
 
-
-
-
-
+simple_tweetyclr.plot_UMAP_embedding(embed, simple_tweetyclr.mean_colors_per_minispec,embeddable_images, f'{simple_tweetyclr.folder_name}/Plots/UMAP_Analysis.html', saveflag = True)
 
