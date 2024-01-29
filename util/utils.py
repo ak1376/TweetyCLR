@@ -356,13 +356,36 @@ class Tweetyclr:
         
         cosine_sim = cosine_similarity(self.umap_embed_init[indices_of_interest,:])
 
-        # Rewrite the loop as a list comprehension
-        # List comprehension to find the indices of the 10 smallest values for each row
-        smallest_indices_per_row = [np.concatenate((
-            np.array([indices_of_interest[i]]),
-            np.array([indices_of_interest[int(np.argpartition(cosine_sim[i, :], self.hard_negatives)[:self.hard_negatives][np.argsort(cosine_sim[i, :][np.argpartition(cosine_sim[i, :], self.hard_negatives)[:self.hard_negatives]])])]])
-        )) for i in np.arange(len(indices_of_interest))
-        ]
+        # # Rewrite the loop as a list comprehension
+        # # List comprehension to find the indices of the 10 smallest values for each row
+        # smallest_indices_per_row = [np.concatenate((
+        #     np.array([indices_of_interest[i]]),
+        #     np.array([indices_of_interest[int(np.argpartition(cosine_sim[i, :], self.hard_negatives)[:self.hard_negatives][np.argsort(cosine_sim[i, :][np.argpartition(cosine_sim[i, :], self.hard_negatives)[:self.hard_negatives]])])]])
+        # )) for i in np.arange(len(indices_of_interest))
+        # ]
+        
+        # Initialize a list to store the smallest indices for each row
+        smallest_indices_per_row = []
+        
+        # Iterate over each row in the cosine similarity matrix
+        for row_idx in range(len(indices_of_interest)):
+            # Get the current row from the cosine similarity matrix
+            current_row = cosine_sim[row_idx, :]
+        
+            # Find the indices of the 'self.hard_negatives' smallest values in the current row
+            partitioned_indices = np.argpartition(current_row, self.hard_negatives)[:self.hard_negatives]
+            sorted_indices = partitioned_indices[np.argsort(current_row[partitioned_indices])]
+        
+            # Map these indices back to the original indices of interest
+            original_indices = [indices_of_interest[idx] for idx in sorted_indices]
+        
+            # Concatenate the current index of interest with the found indices
+            smallest_indices = [indices_of_interest[row_idx]] + original_indices
+        
+            # Add the result to the list
+            smallest_indices_per_row.append(smallest_indices)
+
+# 'smallest_indices_per_row' now contains the desired indices for each row
         
         # Easy negatives: randomly sample p points from outside the bound box 
         # region.
@@ -488,7 +511,23 @@ class Temporal_Augmentation:
             input()
             
 
-        return positive_aug_data
+        
+        # Define the noise scale (e.g., 5% of the data range)
+        noise_scale = 0.5
+
+        # Generate uniform noise and scale it
+        noise = torch.rand_like(positive_aug_data) * noise_scale
+
+        # Add the noise to the original tensor
+        noisy_tensor = positive_aug_data + noise
+
+        # Clip values to be between 0 and 1
+        noisy_tensor_clipped = torch.clamp(noisy_tensor, 0, 1)
+
+        
+        return noisy_tensor_clipped
+
+        # return positive_aug_data
 
 class Custom_Contrastive_Dataset(Dataset):
     def __init__(self, tensor_data, tensor_labels, transform=None):

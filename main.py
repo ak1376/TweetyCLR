@@ -9,7 +9,9 @@ Created on Wed Nov 15 14:40:41 2023
 import numpy as np
 import torch
 import sys
-filepath = '/Users/AnanyaKapoor'
+filepath = '/home/akapoor'
+import os
+os.chdir(f'{filepath}/Dropbox (University of Oregon)/Kapoor_Ananya/01_Projects/01_b_Canary_SSL/TweetyCLR_Repo/')
 # sys.path.append(f'{filepath}/Dropbox (University of Oregon)/Kapoor_Ananya/01_Projects/01_b_Canary_SSL/TweetyCLR_Repo/')
 from util import MetricMonitor, SupConLoss
 from util import Tweetyclr, Temporal_Augmentation, TwoCropTransform, Custom_Contrastive_Dataset
@@ -23,6 +25,7 @@ import matplotlib.pyplot as plt
 import torch.optim as optim
 import matplotlib.colors as mcolors
 import matplotlib.cm as cm
+import torch.nn.init as init
 
 plt.rcParams.update({'font.size': 20})
 plt.rcParams['figure.figsize'] = [15, 15]  # width and height should be in inches, e.g., [10, 6]
@@ -30,148 +33,127 @@ plt.rcParams['figure.figsize'] = [15, 15]  # width and height should be in inche
 class Encoder(nn.Module):
     def __init__(self):
         super().__init__()
-        self.conv1 = nn.Conv2d(1, 8, 3,1,padding=1) 
-        self.conv2 = nn.Conv2d(8, 8, 3,2,padding=1) 
-        self.conv3 = nn.Conv2d(8, 16,3,1,padding=1) 
-        self.conv4 = nn.Conv2d(16,16,3,2,padding=1) 
-        self.conv5 = nn.Conv2d(16,24,3,1,padding=1) 
-        self.conv6 = nn.Conv2d(24,24,3,2,padding=1) 
-        self.conv7 = nn.Conv2d(24,32,3,1,padding=1) 
+        self.conv1 = nn.Conv2d(1, 8, 3,1,padding=1)
+        self.conv2 = nn.Conv2d(8, 8, 3,2,padding=1)
+        self.conv3 = nn.Conv2d(8, 16,3,1,padding=1)
+        self.conv4 = nn.Conv2d(16,16,3,2,padding=1)
+        self.conv5 = nn.Conv2d(16,24,3,1,padding=1)
+        self.conv6 = nn.Conv2d(24,24,3,2,padding=1)
+        self.conv7 = nn.Conv2d(24,32,3,1,padding=1)
         self.conv8 = nn.Conv2d(32,24,3,2,padding=1)
         self.conv9 = nn.Conv2d(24,24,3,1,padding=1)
         self.conv10 = nn.Conv2d(24,16,3,2,padding=1)
-        # self.conv11 = nn.Conv2d(16, 8, 3, 1, padding = 1)
-        # self.conv12 = nn.Conv2d(8, 8, 3, 2, padding = 1)
-        
-        
-        self.bn1 = nn.BatchNorm2d(8) 
-        self.bn2 = nn.BatchNorm2d(8) 
-        self.bn3 = nn.BatchNorm2d(16) 
-        self.bn4 = nn.BatchNorm2d(16) 
-        self.bn5 = nn.BatchNorm2d(24) 
-        self.bn6 = nn.BatchNorm2d(24) 
+
+        self.bn1 = nn.BatchNorm2d(8)
+        self.bn2 = nn.BatchNorm2d(8)
+        self.bn3 = nn.BatchNorm2d(16)
+        self.bn4 = nn.BatchNorm2d(16)
+        self.bn5 = nn.BatchNorm2d(24)
+        self.bn6 = nn.BatchNorm2d(24)
         self.bn7 = nn.BatchNorm2d(32)
         self.bn8 = nn.BatchNorm2d(24)
         self.bn9 = nn.BatchNorm2d(24)
         self.bn10 = nn.BatchNorm2d(16)
-
-        self.relu = nn.ReLU()       
-        self.dropout = nn.Dropout2d()
-
-        self._to_linear = 320
         
-    def forward(self, x):
+        self.ln1 = nn.LayerNorm([8, 100, 151])
+        self.ln2 = nn.LayerNorm([8, 50, 76])
+        self.ln3 = nn.LayerNorm([16, 50, 76])
+        self.ln4 = nn.LayerNorm([16, 25, 38])
+        self.ln5 = nn.LayerNorm([24, 25, 38])
+        self.ln6 = nn.LayerNorm([24, 13, 19])
+        self.ln7 = nn.LayerNorm([32, 13, 19])
+        self.ln8 = nn.LayerNorm([24, 7, 10])
+        self.ln9 = nn.LayerNorm([24, 7, 10])
+        self.ln10 = nn.LayerNorm([16, 4, 5])
+
+        self.relu = nn.ReLU(inplace = False)
+        self.sigmoid = nn.Sigmoid()
         
-        x = F.relu(self.bn1(self.conv1(x)))
-        x = F.relu(self.bn2(self.conv2(x))) 
-        x = F.relu(self.bn3(self.conv3(x)))
-        x = F.relu(self.bn4(self.conv4(x))) 
-        x = F.relu(self.bn5(self.conv5(x)))
-        x = F.relu(self.bn6(self.conv6(x))) 
-        x = F.relu(self.bn7(self.conv7(x)))
-        x = F.relu(self.bn8(self.conv8(x)))
-        x = F.relu(self.bn9(self.conv9(x)))
-        x = F.relu(self.bn10(self.conv10(x)))
-
-        x = x.view(-1, 320)
-
+        # self.fc = nn.Sequential(
+        #     nn.Linear(320, 256),
+        #     nn.ReLU(inplace=True), 
+        #     nn.Linear(256, 1)
+        # )  
+        self.fc = nn.Sequential(
+            nn.Linear(320, 256),
+            nn.ReLU(inplace=False), 
+        )  
         
-        return x
+        self.dropout = nn.Dropout(p=0.5)
+        
+        # Initialize convolutional layers with He initialization
+        self._initialize_weights()
 
-def pretraining(epoch, model, contrastive_loader_train, contrastive_loader_test, optimizer, criterion, epoch_number, method='SimCLR'):
-    "Contrastive pre-training over an epoch. Adapted from XX"
-    negative_similarities_for_epoch = []
-    ntxent_positive_similarities_for_epoch = []
-    mean_pos_cos_sim_for_epoch = []
-    mean_ntxent_positive_similarities_for_epoch = []
-    metric_monitor = MetricMonitor()
+    def _initialize_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                if m.bias is not None:
+                    init.zeros_(m.bias)
+
+    def forward_once(self, x):
+
+        # No BatchNorm
+        # x = F.relu((self.conv1(x)))
+        # x = F.relu((self.conv2(x)))
+        # x = F.relu((self.conv3(x)))
+        # x = F.relu((self.conv4(x)))
+        # x = F.relu((self.conv5(x)))
+        # x = F.relu((self.conv6(x)))
+        # x = F.relu((self.conv7(x)))
+        # x = F.relu((self.conv8(x)))
+        # x = F.relu((self.conv9(x)))
+        # x = F.relu((self.conv10(x)))
+
+        # BatchNorm 
+        # x = self.relu(self.bn1(self.conv1(x)))
+        # x = self.relu(self.bn2(self.conv2(x)))
+        # x = self.relu(self.bn3(self.conv3(x)))
+        # x = self.relu(self.bn4(self.conv4(x)))
+        # x = self.relu(self.bn5(self.conv5(x)))
+        # x = self.relu(self.bn6(self.conv6(x)))
+        # x = self.relu(self.bn7(self.conv7(x)))
+        # x = self.relu(self.bn8(self.conv8(x)))
+        # x = self.relu(self.bn9(self.conv9(x)))
+        # x = self.relu(self.bn10(self.conv10(x)))
+        
+        # LayerNorm
+        # x = (self.relu(self.ln1(self.conv1(x))))
+        # x = (self.relu(self.ln2(self.conv2(x))))
+        # x = (self.relu(self.ln3(self.conv3(x))))
+        # x = (self.relu(self.ln4(self.conv4(x))))
+        # x = (self.relu(self.ln5(self.conv5(x))))
+        # x = (self.relu(self.ln6(self.conv6(x))))
+        # x = (self.relu(self.ln7(self.conv7(x))))
+        # x = (self.relu(self.ln8(self.conv8(x))))
+        # x = (self.relu(self.ln9(self.conv9(x))))
+        # x = (self.relu(self.ln10(self.conv10(x))))
+        
+        # LayerNorm + Dropout
+        x = self.dropout(self.relu(self.ln1(self.conv1(x))))
+        x = self.dropout(self.relu(self.ln2(self.conv2(x))))
+        x = self.dropout(self.relu(self.ln3(self.conv3(x))))
+        x = self.dropout(self.relu(self.ln4(self.conv4(x))))
+        x = self.dropout(self.relu(self.ln5(self.conv5(x))))
+        x = self.dropout(self.relu(self.ln6(self.conv6(x))))
+        x = self.dropout(self.relu(self.ln7(self.conv7(x))))
+        x = self.dropout(self.relu(self.ln8(self.conv8(x))))
+        x = self.dropout(self.relu(self.ln9(self.conv9(x))))
+        x = self.dropout(self.relu(self.ln10(self.conv10(x))))
+
+        x_flattened = x.view(-1, 320)
+        
+        return x_flattened
     
-    # TRAINING PHASE
-    
-    model.train()
-
-    for batch_data in enumerate(contrastive_loader_train):
-        data_list = []
-        label_list = []
-        a = batch_data[1]
-        for idx in np.arange(len(a)):
-            data_list.append(a[idx][0])
+    def forward(self, anchor_img, positive_img, negative_img):
         
+        # Pass the two spectrogram slices through a convolutional frontend to get a representation for each slice
         
-        data = torch.cat((data_list), dim = 0)
-        data = data.unsqueeze(1)
-
-        if torch.cuda.is_available():
-            data = data.cuda()
-        data = torch.autograd.Variable(data,False)
-        bsz = a[idx][0].shape[0]
-        data = data.to(torch.float32)
-        features = model(data)
-        norm = features.norm(p=2, dim=1, keepdim=True)
-        epsilon = 1e-12
-        # Add a small epsilon to prevent division by zero
-        normalized_tensor = features / (norm + epsilon)
-        split_features = torch.split(normalized_tensor, [bsz]*len(a), dim=0)
-        split_features = [split.unsqueeze(1) for split in split_features]
-
-        features = torch.cat(split_features, dim = 1)
-
-        training_loss, training_negative_similarities, training_positive_similarities = criterion(features)
-
-        metric_monitor.update("Training Loss", training_loss.item())
-        metric_monitor.update("Learning Rate", optimizer.param_groups[0]['lr'])
+        anchor_emb = self.relu(self.fc(self.forward_once(anchor_img)))
+        positive_emb = self.relu(self.fc(self.forward_once(positive_img)))
+        negative_emb = self.relu(self.fc(self.forward_once(negative_img)))
         
-        if epoch_number !=0:
-            optimizer.zero_grad()
-            training_loss.backward()
-            optimizer.step()
-
-        negative_similarities_for_epoch.append(float(np.mean(training_negative_similarities.clone().detach().cpu().numpy())))
-
-        ntxent_positive_similarities_for_epoch.append(float(np.mean(training_positive_similarities.clone().detach().cpu().numpy())))
-        
-        # # Calculate the mean cosine similarity of the model feature representation for the positive pairs.
-        # # Slice the tensor to separate the two sets of features you want to compare
-        
-        split_features = torch.split(normalized_tensor, [bsz]*len(a), dim=0)
-        split_features = [split.unsqueeze(1) for split in split_features]
-        training_features = torch.cat(split_features, dim = 1)
-        
-        # VALIDATION PHASE
-        
-        model.eval()
-
-        for batch_data in enumerate(contrastive_loader_test):
-            data_list = []
-            label_list = []
-            a = batch_data[1]
-            for idx in np.arange(len(a)):
-                data_list.append(a[idx][0])
-            
-            data = torch.cat((data_list), dim = 0)
-            data = data.unsqueeze(1)
-            if torch.cuda.is_available():
-                data = data.cuda()
-            data = torch.autograd.Variable(data,False)
-            bsz = a[idx][0].shape[0]
-            data = data.to(torch.float32)
-            features = model(data)
-            norm = features.norm(p=2, dim=1, keepdim=True)
-            epsilon = 1e-12
-            # Add a small epsilon to prevent division by zero
-            normalized_tensor = features / (norm + epsilon)
-            split_features = torch.split(normalized_tensor, [bsz]*len(a), dim=0)
-            split_features = [split.unsqueeze(1) for split in split_features]
-
-            validation_features = torch.cat(split_features, dim = 1)
-
-            validation_loss, validation_negative_similarities, validation_positive_similarities = criterion(validation_features)
-            
-            metric_monitor.update("Validation Loss", validation_loss.item())
-
-
-    print(f'Epoch: {epoch:03d} Contrastive Pre-train Loss: {training_loss:.3f}, Validation Loss: {validation_loss:.3f}')
-    return metric_monitor.metrics['Training Loss']['avg'], metric_monitor.metrics['Validation Loss']['avg'], metric_monitor.metrics['Learning Rate']['avg'], training_features, validation_features, negative_similarities_for_epoch, ntxent_positive_similarities_for_epoch
+        return anchor_emb, positive_emb, negative_emb
 
 # =============================================================================
 #     # Set data parameters
@@ -189,7 +171,7 @@ analysis_path = f'{filepath}/Dropbox (University of Oregon)/Kapoor_Ananya/01_Pro
 # analysis_path = '/home/akapoor/Dropbox (University of Oregon)/Kapoor_Ananya/01_Projects/01_b_Canary_SSL/TweetyCLR_Repo/'
 
 # # Parameters we set
-num_spec = 80
+num_spec = 10
 window_size = 100
 stride = 10
 
@@ -205,7 +187,7 @@ masking_freq_tuple = (500, 7000)
 spec_dim_tuple = (window_size, 151)
 
 
-with open(f'{filepath}/Dropbox (University of Oregon)/Kapoor_Ananya/01_Projects/01_b_Canary_SSL/Canary_SSL_Repo/InfoNCE_Num_Spectrograms_100_Window_Size_100_Stride_10/category_colors.pkl', 'rb') as file:
+with open(f'{filepath}/Dropbox (University of Oregon)/Kapoor_Ananya/01_Projects/01_b_Canary_SSL/TweetyCLR_Repo/category_colors.pkl', 'rb') as file:
     category_colors = pickle.load(file)
     
 exclude_transitions = False
@@ -215,14 +197,12 @@ exclude_transitions = False
 # =============================================================================
 
 easy_negatives = 1
-hard_negatives = 1
+hard_negatives = 0
 batch_size = easy_negatives + hard_negatives + 1
-num_epochs = 10
+num_epochs = 100
 tau_in_steps = 3
-temp_value = 0.02
-method = 'SimCLR'
 device = 'cuda'
-use_scheduler = True
+use_scheduler = False
 
 # =============================================================================
 #     # Initialize the TweetyCLR object
@@ -256,9 +236,9 @@ masked_frequencies = freq[mask].reshape(151,1)
 # reducer = umap.UMAP(metric = 'cosine', random_state=295)
 reducer = umap.UMAP(metric = 'cosine')
 
-# embed = reducer.fit_transform(simple_tweetyclr.stacked_windows)
+embed = reducer.fit_transform(simple_tweetyclr.stacked_windows)
 # Preload the embedding 
-embed = np.load(f'{simple_tweetyclr.folder_name}/embed_80_specs.npy')
+# embed = np.load(f'{simple_tweetyclr.folder_name}/embed_80_specs.npy')
 simple_tweetyclr.umap_embed_init = embed
 
 plt.figure()
@@ -303,16 +283,16 @@ ax.set_ylim([min(embed[:,1]) - 1, max(embed[:, 1]) + 1])  # Zoom out on y-axis
 # Show the updated plot
 plt.show()
 
-# Get current axes
-ax = plt.gca()
-# Get current limits
-xlim = ax.get_xlim()
-ylim = ax.get_ylim()
+# # Get current axes
+# ax = plt.gca()
+# # Get current limits
+# xlim = ax.get_xlim()
+# ylim = ax.get_ylim()
 
-hard_indices = np.where((embed[:,0]>=xlim[0])&(embed[:,0]<=xlim[1]) & (embed[:,1]>=ylim[0]) & (embed[:,1]<=ylim[1]))[0]
+# hard_indices = np.where((embed[:,0]>=xlim[0])&(embed[:,0]<=xlim[1]) & (embed[:,1]>=ylim[0]) & (embed[:,1]<=ylim[1]))[0]
 
-hard_indices_dict[1] = hard_indices
-hard_region_coordinates[1] = [xlim, ylim]
+# hard_indices_dict[1] = hard_indices
+# hard_region_coordinates[1] = [xlim, ylim]
 
 # Let's plot the two hard regions
 
