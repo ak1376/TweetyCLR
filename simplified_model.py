@@ -55,7 +55,7 @@ directory = bird_dir+ 'Python_Files'
 analysis_path = f'{filepath}/Dropbox (University of Oregon)/Kapoor_Ananya/01_Projects/01_b_Canary_SSL/TweetyCLR_Repo/'
 
 # # Parameters we set
-num_spec = 10
+num_spec = 80
 window_size = 100
 stride = 10
 
@@ -68,10 +68,10 @@ stride = 10
 log_experiment = True
 if log_experiment == True:
     user_input = input("Please enter the experiment name: ")
-    folder_name = f'{analysis_path}Supervised_Task/Num_Spectrograms_{num_spec}_Window_Size_{window_size}_Stride_{stride}/{user_input}'
+    folder_name = f'{analysis_path}Num_Spectrograms_{num_spec}_Window_Size_{window_size}_Stride_{stride}/{user_input}'
     
 else:
-    folder_name = f'{analysis_path}Supervised_Task/Num_Spectrograms_{num_spec}_Window_Size_{window_size}_Stride_{stride}'
+    folder_name = f'{analysis_path}Num_Spectrograms_{num_spec}_Window_Size_{window_size}_Stride_{stride}'
 
 
 # Organize the files for analysis 
@@ -116,7 +116,7 @@ stacked_windows.shape = (stacked_windows.shape[0], 100*151)
 
 # Set up a base dataloader (which we won't directly use for modeling). Also define the batch size of interest
 total_dataset = TensorDataset(torch.tensor(simple_tweetyclr.stacked_windows.reshape(simple_tweetyclr.stacked_windows.shape[0], 1, 100, 151)))
-batch_size = 128
+batch_size = 64
 total_dataloader = DataLoader(total_dataset, batch_size=batch_size , shuffle=False)
 
 import torch
@@ -252,7 +252,8 @@ class Encoder(nn.Module):
 
 # Need to compute the UMAP embedding
 # reducer = umap.UMAP(metric = 'cosine', random_state=295)
-reducer = umap.UMAP(metric = 'cosine')
+# reducer = umap.UMAP(metric = 'cosine')
+reducer = umap.UMAP(random_state = 295)
 
 embed = reducer.fit_transform(simple_tweetyclr.stacked_windows)
 # Preload the embedding 
@@ -379,19 +380,21 @@ class APP_MATCHER(Dataset):
         self.all_possible_negatives = all_possible_negatives
         
         # Find the positive images
-        positive_dict = self.select_positive_image()
+        positive_dict, dict_of_indices = self.select_positive_image()
         self.positive_dict = positive_dict
+        self.dict_of_indices = dict_of_indices
         
     def select_positive_image(self):
         # Compute pairwise Euclidean distances
-        distances = torch.cdist(self.umap_embedding[self.hard_indices,:], self.umap_embedding[self.hard_indices,:], p=2)
+        distances = torch.cdist(self.umap_embedding, self.umap_embedding, p=2)
         
         # Dictionary to store the top 5 closest points for each data point
         # TODO: I should also create a dictionary that goes from 0, ..., 470 and stores the hard_index. That way I can use index in the__getitem__ function to extract the top_5 spectrogram slices.
-        top_5_dict = {}
+        top_dict = {}
+        dict_of_indices = {}
         
         # Iterate over each data point
-        for i in range(self.umap_embedding[hard_indices,:].size(0)):
+        for i in range(self.umap_embedding.size(0)):
             # Exclude the distance to the point itself by setting it to a high value
             distances[i, i] = float('inf')
         
@@ -399,9 +402,22 @@ class APP_MATCHER(Dataset):
             _, closest_indices = torch.topk(distances[i], 5, largest=False)
         
             # Store the corresponding points in the dictionary
-            top_5_dict[self.hard_indices[i].item()] = closest_indices
+            top_dict[i] = closest_indices
             
-        return top_5_dict
+            dict_of_indices[i] = i 
+            
+        
+        # Subset the dictionary to only see the values for the hard_indices keys
+        # Keys you want to keep
+        keys_to_keep = self.hard_indices.tolist()
+        
+        # New dictionary with only the keys you want
+        selected_dict = {k: top_dict[k] for k in keys_to_keep if k in top_dict}
+        dict_of_indices = {k: dict_of_indices[k] for k in keys_to_keep if k in dict_of_indices}
+
+        
+                                
+        return selected_dict, dict_of_indices
     
     def __len__(self):
         return self.hard_indices.shape[0]
@@ -415,9 +431,10 @@ class APP_MATCHER(Dataset):
         # TODO: Revise this function so that I don't get KeyErrors anymore
         
         # The positive spectrogram slice will be the spectrogram slice that is closest in UMAP space to the anchor slice.
-        
-        actual_index = self.hard_indices[index].item()
-        anchor_img = self.hard_features[actual_index,:, :, :].unsqueeze(1)
+        dict_of_indices = self.dict_of_indices
+        keys = list(dict_of_indices.keys())
+        actual_index = dict_of_indices[keys[index]]
+        anchor_img = self.all_features[actual_index,:, :, :]
         
         # =============================================================================
         #         Positive Sample
@@ -430,7 +447,7 @@ class APP_MATCHER(Dataset):
         
         # Select the element at the random index
         positive_index = top_5_images[random_index].item()
-        positive_img = self.hard_features[positive_index, :, :, :].unsqueeze(1)
+        positive_img = self.all_features[positive_index, :, :, :]
                 
         # =============================================================================
         #         Negative Sample
@@ -462,12 +479,164 @@ if torch.cuda.device_count() > 1:
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model.to(device).to(torch.float32)
 
+criterion = nn.TripletMarginLoss(margin=1.0, p=2)
+optimizer = optim.Adam(model.parameters(), lr=1e-3)
 
-
-
-
-
-
+num_epochs = 100
+training_epoch_loss = []
+validation_epoch_loss = []
+for epoch in np.arange(num_epochs):
+    model.train()
+    training_loss = 0
+    for batch_idx, (anchor_img, positive_img, negative_img) in enumerate(train_loader):
+        anchor_img, positive_img, negative_img = anchor_img.to(device, dtype = torch.float32), positive_img.to(device, dtype = torch.float32), negative_img.to(device, dtype = torch.float32)
         
+        optimizer.zero_grad()
+        anchor_emb, positive_emb, negative_emb = model(anchor_img, positive_img, negative_img)
+        loss = criterion(anchor_emb, positive_emb, negative_emb)
+        training_loss+=loss.item()
+        loss.backward()
+        optimizer.step()
+
+    training_epoch_loss.append(training_loss / len(train_loader))
+    
+    print(f'Epoch {epoch}, Training Loss: {training_epoch_loss[-1]}')
+
+plt.figure()
+plt.title("Training Loss")
+plt.plot(training_epoch_loss, color = 'blue')
+plt.xlabel("Epoch")
+plt.ylabel("Triplet Loss")
+plt.savefig(f'{folder_name}/loss_curve.png')
+
+plt.show()
+
+model_rep = []
+total_dataset = TensorDataset(torch.tensor(simple_tweetyclr.stacked_windows.reshape(simple_tweetyclr.stacked_windows.shape[0], 1, 100, 151)), torch.tensor(simple_tweetyclr.stacked_labels_for_window))
+
+hard_stacked_windows = simple_tweetyclr.stacked_windows[hard_indices,:]
+
+hard_dataset = TensorDataset(torch.tensor(hard_stacked_windows.reshape(hard_stacked_windows.shape[0], 1, simple_tweetyclr.time_dim, simple_tweetyclr.freq_dim)))
+hard_dataloader = DataLoader(hard_dataset, batch_size=batch_size , shuffle=False)
+
+# total_dat = APP_MATCHER(total_dataset)
+# total_dataloader = torch.utils.data.DataLoader(total_dat, batch_size = batch_size, shuffle = shuffle_status)
+model_rep = []
+
+model = model.to('cpu')
+model.eval()
+with torch.no_grad():
+    for batch_idx, data in enumerate(hard_dataloader):
+        data = data[0]
+        data = data.to(torch.float32)
+        output = model.module.forward_once(data)
+        model_rep.append(output.numpy())
+
+model_rep_stacked = np.concatenate((model_rep))
+
+import umap
+reducer = umap.UMAP(random_state=295) # For consistency
+embed = reducer.fit_transform(model_rep_stacked)
+
+plt.figure()
+plt.scatter(embed[:,0], embed[:,1], c = simple_tweetyclr.mean_colors_per_minispec[hard_indices,:])
+plt.xlabel("UMAP 1")
+plt.ylabel("UMAP 2")
+plt.title("UMAP of the Representation Layer")
+plt.show()
+plt.savefig(f'{folder_name}/UMAP_rep_of_model.png')
+
+# Bokeh Plot
+list_of_images = []
+for batch_idx, (data) in enumerate(hard_dataloader):
+    data = data[0]
+    
+    for image in data:
+        list_of_images.append(image)
         
+list_of_images = [tensor.numpy() for tensor in list_of_images]
+
+embeddable_images = simple_tweetyclr.get_images(list_of_images)
+
+simple_tweetyclr.plot_UMAP_embedding(embed, simple_tweetyclr.mean_colors_per_minispec[hard_indices,:],embeddable_images, f'{simple_tweetyclr.folder_name}/Plots/UMAP_Analysis.html', saveflag = True)
+
+model_form = model.module
+
+
+model_arch = str(model_form)
+forward_method = inspect.getsource(model_form.forward)
+forward_once_method = inspect.getsource(model_form.forward_once)
+
+# Splitting the string into an array of lines
+model_arch_lines = model_arch.split('\n')
+forward_method_lines = forward_method.split('\n')
+forward_once_method_lines = forward_once_method.split('\n')
+
+
+# CHANGE THIS 
+train_perc = 1.0
+
+
+experiment_params = {
+    "Data_Directory": bird_dir,
+    "Window_Size": simple_tweetyclr.window_size, 
+    "Stride_Size": simple_tweetyclr.stride, 
+    "Num_Spectrograms": simple_tweetyclr.num_spec, 
+    "Total_Slices": simple_tweetyclr.stacked_windows.shape[0], 
+    "Frequencies_of_Interest": masking_freq_tuple, 
+    "Data_Standardization": "None",
+    "Optimizer": str(optimizer), 
+    "Batch_Size": batch_size, 
+    "Num_Epochs": num_epochs, 
+    "Torch_Random_Seed": 295, 
+    "Accumulation_Size": train_perc, 
+    "Train_Proportion": train_perc,
+    "Criterion": str(criterion), 
+    "Model_Architecture": model_arch_lines, 
+    "Forward_Method": forward_method_lines, 
+    "Forward_Once_Method": forward_once_method_lines,
+    "Dataloader_Shuffle": shuffle_status
+    }
+
+import json
+
+with open(f'{simple_tweetyclr.folder_name}/experiment_params.json', 'w') as file:
+    json.dump(experiment_params, file, indent=4)
+    
+
+# I am going to try an additional debugging step
+# It is clear that UMAP is not able to represent the green and red differently.
+# This is because the sample selection is not being tasked to contrast red 
+# against green. However, the model should be able to have a good 
+# representation for red that is translationally invariant. 
+# I will do a UMAP decomposition on red samples only
+
+hard_labels = simple_tweetyclr.stacked_labels_for_window[hard_indices,:]
+
+# Find rows that contain 4
+rows_with_4 = np.any(hard_labels == 4, axis=1)
+
+# Find rows that do not contain 10
+rows_without_10 = ~np.any(hard_labels == 10, axis=1)
+
+# Combine conditions: rows that contain 4 and do not contain 10
+desired_rows = np.array([rows_with_4 & rows_without_10])
+desired_rows.shape = (desired_rows.shape[1],)
+
+model_rep_stacked_new = model_rep_stacked[desired_rows,:]
+        
+reducer = umap.UMAP(random_state=295) # For consistency
+embed = reducer.fit_transform(model_rep_stacked_new)
+
+
+hard_colors = simple_tweetyclr.mean_colors_per_minispec[hard_indices,:]
+hard_colors = hard_colors[desired_rows,:]
+plt.figure()
+plt.scatter(embed[:,0], embed[:,1], c = hard_colors)
+plt.xlabel("UMAP 1")
+plt.ylabel("UMAP 2")
+plt.title("UMAP of the Representation Layer")
+plt.show()
+# plt.savefig(f'{folder_name}/UMAP_rep_of_model.png')
+
 
