@@ -34,7 +34,7 @@ from sklearn.model_selection import KFold
 
 
 class Tweetyclr:
-    def __init__(self, num_spec, window_size, stride, folder_name, all_songs_data, masking_freq_tuple, spec_dim_tuple, exclude_transitions = False, category_colors = None):
+    def __init__(self, num_spec, window_size, stride, folder_name, all_songs_data, masking_freq_tuple, spec_dim_tuple, category_colors = None):
         '''The init function should define:
             1. directory for bird
             2. directory for python files
@@ -53,12 +53,13 @@ class Tweetyclr:
         self.stride = stride
         # self.analysis_path = analysis_path
         self.category_colors = category_colors
+
         self.folder_name = folder_name
         self.all_songs_data = all_songs_data
         self.masking_freq_tuple = masking_freq_tuple
         self.freq_dim = spec_dim_tuple[1]
         self.time_dim = spec_dim_tuple[0]
-        self.exclude_transitions = exclude_transitions
+        self.category_colors = category_colors
 
         # Create the folder if it doesn't already exist
         if not os.path.exists(folder_name+"/Plots/Window_Plots"):
@@ -90,9 +91,24 @@ class Tweetyclr:
 
             subsetted_spec = spec[mask.reshape(mask.shape[0],),:]
             
+        # Preallocate memory for arrays if possible
+        # Example: If you know the total size beforehand, initialize stacked_labels and stacked_specs arrays with that size
+        stacked_labels = [] 
+        stacked_specs = []
+        
+        # current_index = 0
+
+        for i in np.arange(self.num_spec):
+            dat = np.load(self.all_songs_data[i])
+            spec = dat['s']
+            frequencies = dat['f']
+            labels = dat['labels'].T
+
+            # Apply masking
+            mask = (frequencies < self.masking_freq_tuple[1]) & (frequencies > self.masking_freq_tuple[0])
+            subsetted_spec = spec[mask.reshape(mask.shape[0],),:]            
             stacked_labels.append(labels)
             stacked_specs.append(subsetted_spec)
-
             
         stacked_specs = np.concatenate((stacked_specs), axis = 1)
         stacked_labels = np.concatenate((stacked_labels), axis = 0)
@@ -158,6 +174,50 @@ class Tweetyclr:
             mean_color = np.mean(all_colors_in_minispec, axis = 0)
             mean_colors_per_minispec[i,:] = mean_color
 
+
+        # If preallocation isn't possible, concatenate at the end
+        stacked_specs = np.concatenate(stacked_specs, axis=1)
+        stacked_labels = np.concatenate(stacked_labels, axis=0)
+
+        # Process category colors
+        unique_categories = np.unique(stacked_labels)
+        if self.category_colors is None:
+            self.category_colors = {category: np.random.rand(3,) for category in unique_categories}
+            with open(f'{self.folder_name}/category_colors.pkl', 'wb') as f:
+                pickle.dump(self.category_colors, f)
+
+        
+        spec_for_analysis = stacked_specs.T
+        # Process windows
+        dx = np.diff(dat['t'])[0, 0]
+        num_windows = (spec_for_analysis.shape[0] - self.window_size) // self.stride + 1
+        # We will now extract each mini-spectrogram from the full spectrogram
+        stacked_windows = np.zeros((num_windows, self.window_size * subsetted_spec.shape[0]))
+        stacked_labels_for_window = np.zeros((num_windows, self.window_size))
+        stacked_window_times = np.zeros((num_windows, self.window_size))
+
+
+        for i in range(num_windows):
+            start_idx = i * self.stride
+            end_idx = start_idx + self.window_size
+            window = spec_for_analysis[start_idx:end_idx, :]
+            window_times = dx*np.arange(i, i + self.window_size)
+            window = window.reshape(1, window.shape[0]*window.shape[1])
+            labels_for_window = stacked_labels[start_idx:end_idx, :]
+
+            # Flatten and store in preallocated arrays
+            stacked_windows[i, :] = window.flatten()
+            stacked_labels_for_window[i, :] = labels_for_window.flatten()
+            stacked_window_times[i, :] = dx * np.arange(start_idx, end_idx)
+
+
+        # Calculate mean colors
+        mean_colors_per_minispec = np.zeros((stacked_labels_for_window.shape[0], 3))
+        for i in range(stacked_labels_for_window.shape[0]):
+            colors = np.array([self.category_colors[label] for label in stacked_labels_for_window[i, :]])
+            mean_colors_per_minispec[i, :] = np.mean(colors, axis=0)
+
+        # Assign to class attributes
         self.stacked_windows = stacked_windows
         self.stacked_labels_for_window = stacked_labels_for_window
         self.mean_colors_per_minispec = mean_colors_per_minispec
@@ -166,6 +226,10 @@ class Tweetyclr:
         self.stacked_specs = stacked_specs
         self.stacked_labels = stacked_labels
         # self.dict_of_spec_slices_with_slice_number = dict_of_spec_slices_with_slice_number
+        self.masked_frequencies = frequencies[mask]
+        self.stacked_specs = spec_for_analysis
+        self.stacked_labels = stacked_labels
+
 
 
     # def embeddable_image(self, data, folderpath_for_slices, window_times, iteration_number):
@@ -348,7 +412,48 @@ class Tweetyclr:
         
         
         return stacked_windows_train, stacked_labels_train, mean_colors_per_minispec_train, training_indices_stacked, training_indices_by_region, stacked_windows_test, stacked_labels_test, mean_colors_per_minispec_test, testing_indices_stacked, testing_indices_by_region
+
+    def shuffling(self, seed, shuffled_indices = None):
+        
+        np.random.seed(seed)
+        
+        if shuffled_indices is None:
+            shuffled_indices = np.random.permutation(self.stacked_windows.shape[0])
+                    
+        self.shuffled_indices = shuffled_indices
+        
+        
+    def train_test_split(self, dataset, train_split_perc, shuffled_indices):
+        ''' 
+        The following is the procedure I want to do for the train_test_split.
+        
+        '''
+        
+        # I want to make training indices to be the first 80% of the shuffled data
+        split_point = int(train_split_perc*dataset.shape[0])
+        
+        anchor_indices = shuffled_indices[:split_point]
+
+        # Shuffle array1 using the shuffled indices
+        stacked_windows_for_analysis_modeling = dataset[shuffled_indices,:]
+        # Shuffle array2 using the same shuffled indices
+        # stacked_labels_for_analysis_modeling= self.stacked_labels_for_window[shuffled_indices,:]
+        mean_colors_per_minispec_for_analysis_modeling = self.mean_colors_per_minispec[shuffled_indices, :]
+        
+        stacked_windows_train = torch.tensor(dataset[anchor_indices,:])
+        stacked_windows_train = stacked_windows_train.reshape(stacked_windows_train.shape[0], 1, self.time_dim, self.freq_dim)
+        anchor_indices = anchor_indices
+        # self.train_indices = np.array(training_indices)
+        
+        # mean_colors_per_minispec_train = self.mean_colors_per_minispec[anchor_indices,:]
+        # stacked_labels_train = self.stacked_labels_for_window[anchor_indices,:]
+        
+        
+        anchor_train_indices = anchor_indices
+        
+        return stacked_windows_train, anchor_indices 
     
+        # return stacked_windows_train, stacked_labels_train, mean_colors_per_minispec_train, anchor_indices 
     
     def negative_sample_selection(self, data_for_analysis, indices_of_interest, easy_negative_indices_to_exclude):
         
@@ -389,6 +494,16 @@ class Tweetyclr:
         
         # Easy negatives: randomly sample p points from outside the bound box 
         # region.
+
+        # Rewrite the loop as a list comprehension
+        # List comprehension to find the indices of the 10 smallest values for each row
+        smallest_indices_per_row = [np.concatenate((
+            np.array([indices_of_interest[i]]),
+            np.array([indices_of_interest[int(np.argpartition(cosine_sim[i, :], self.hard_negatives)[:self.hard_negatives][np.argsort(cosine_sim[i, :][np.argpartition(cosine_sim[i, :], self.hard_negatives)[:self.hard_negatives]])])]])
+        )) for i in np.arange(len(indices_of_interest))
+        ]
+        
+        # Easy negatives: randomly sample p points from outside the bound box region.
         
         # For the testing dataset, I want to have easy negatives that are not
         # in common with the easy negatives from training. Therefore I have 
@@ -510,11 +625,9 @@ class Temporal_Augmentation:
             print(f"Encountered KeyError: {e}. Press Enter to continue...")
             input()
             
-
-        
         # Define the noise scale (e.g., 5% of the data range)
         noise_scale = 0.5
-
+        
         # Generate uniform noise and scale it
         noise = torch.rand_like(positive_aug_data) * noise_scale
 
