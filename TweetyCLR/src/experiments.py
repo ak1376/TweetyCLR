@@ -3,16 +3,16 @@ Object that will hold the experiment manager details
 '''
 
 from utils import Tweetyclr
-from MetricMonitor import MetricMonitor
 import os
 import umap
 from collections import ChainMap
 from tqdm import tqdm
 import numpy as np
 import torch
-from Augmentation import temporal_augmentation, white_noise_augmentation
-from Contrastive_Dataloaders import ContrastiveDataset, contrastive_collate_fn
-from torch.utils.data import Dataset, DataLoader
+from Augmentation import temporal_augmentation, white_noise_augmentation, cutout_augmentation
+from Contrastive_Dataloaders import ContrastiveDataset, ContrastiveDataLoader
+from torchvision import transforms
+
 
 class Experiment_Manager:
     '''
@@ -136,37 +136,51 @@ class Experiment_Manager:
     
         return embed
     
-    def applying_augmentations(self, data_object, n_positive_augs = 1, temporal_aug = True, white_noise_aug = False):
-        '''
-        I will need to modify this function to allow for multiple augmentations. I won't do it right now though.
-        '''
-        if len(data_object['stacked_windows'].shape) < 4: 
-            # Reshaping -- can probably make more elegant later
-            stacked_windows = torch.tensor(data_object['stacked_windows'].reshape(data_object['stacked_windows'].shape[0], 1, self.params['window_size'],int(data_object['stacked_windows'].shape[1]//self.params['window_size'])))
-            stacked_labels = torch.tensor(data_object['stacked_labels_for_window'])
+    # def applying_augmentations(self, data_object, n_positive_augs = 1, temporal_aug = True, white_noise_aug = False):
+    #     '''
+    #     I will need to modify this function to allow for multiple augmentations. I won't do it right now though.
+    #     '''
+    #     if len(data_object['stacked_windows'].shape) < 4: 
+    #         # Reshaping -- can probably make more elegant later
+    #         stacked_windows = torch.tensor(data_object['stacked_windows'].reshape(data_object['stacked_windows'].shape[0], 1, self.params['window_size'],int(data_object['stacked_windows'].shape[1]//self.params['window_size'])))
+    #         stacked_labels = torch.tensor(data_object['stacked_labels_for_window'])
 
-        if temporal_aug == True:
-            if white_noise_aug == True:
-                temp_aug = temporal_augmentation(stacked_windows, n_steps_ahead = self.params['n_positive_augs'])[0,:,:,:]
-                aug_data = white_noise_augmentation(temp_aug, k = self.params['n_positive_augs'], noise_std = 3.0, noise_mean = 0)
-            elif white_noise_aug == False:
-                aug_data = temporal_augmentation(stacked_windows, k = self.params['n_positive_augs'], n_steps_ahead = self.params['n_positive_augs'])[0,:,:,:]
-        elif temporal_aug == False: 
-            if white_noise_aug == True: 
-                aug_data = white_noise_augmentation(stacked_windows, k = self.params['n_positive_augs'], noise_std = 3.0, noise_mean = 0)
+    #     if temporal_aug == True:
+    #         if white_noise_aug == True:
+    #             temp_aug = temporal_augmentation(stacked_windows, n_steps_ahead = self.params['n_positive_augs'])[0,:,:,:]
+    #             aug_data = white_noise_augmentation(temp_aug, k = self.params['n_positive_augs'], noise_std = 3.0, noise_mean = 0)
+    #         elif white_noise_aug == False:
+    #             aug_data = temporal_augmentation(stacked_windows, k = self.params['n_positive_augs'], n_steps_ahead = self.params['n_positive_augs'])[0,:,:,:]
+    #     elif temporal_aug == False: 
+    #         if white_noise_aug == True: 
+    #             aug_data = white_noise_augmentation(stacked_windows, k = self.params['n_positive_augs'], noise_std = 3.0, noise_mean = 0)
 
-        return stacked_windows, aug_data, stacked_labels
+    #     return stacked_windows, aug_data, stacked_labels
     
-    def create_dataloader(self, stacked_windows, aug_data, stacked_labels):
-        dataset = ContrastiveDataset(stacked_windows, aug_data, stacked_labels)
+    def create_dataloader(self, stacked_windows, stacked_labels, temporal_aug = False, white_noise_aug = False, cutout_aug = True):
+        '''
+        Rewrite this a bit to include the temporal augmentations
+        '''
 
-        # Define a wrapper for the collate function to pass the dataset
-        def collate_fn_wrapper(batch):
-            return contrastive_collate_fn(batch, dataset)
+        transform_list = []
 
-        dataloader = DataLoader(dataset, batch_size=self.params['batch_size'], shuffle=True, collate_fn=collate_fn_wrapper)
+        if temporal_aug:
+            transform_list.append(temporal_augmentation)
+
+        if white_noise_aug:
+            transform_list.append(white_noise_augmentation)
+
+        if cutout_aug:
+            transform_list.append(cutout_augmentation)
+
+        # Combine all transformations
+        custom_transform = transforms.Compose(transform_list)
+
+        dataset = ContrastiveDataset(stacked_windows, stacked_labels, custom_transform=custom_transform)
+        dataloader = ContrastiveDataLoader(dataset, batch_size=self.params['batch_size'], shuffle=True)
 
         return dataloader
+
     
 
 

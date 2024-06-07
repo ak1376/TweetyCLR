@@ -9,7 +9,7 @@ Created on Tue Oct 24 10:37:10 2023
 from .MetricMonitor import MetricMonitor
 from .SupConLoss import SupConLoss
 from .utils import Tweetyclr, save_umap_img, cosine_similarity_batch, moving_average
-from src.Contrastive_Dataloaders import ContrastiveDataset, contrastive_collate_fn
+from src.Contrastive_Dataloaders import ContrastiveDataset, ContrastiveDataLoader
 from src.Augmentation import temporal_augmentation, white_noise_augmentation
 
 __all__ = ['MetricMonitor',
@@ -18,7 +18,7 @@ __all__ = ['MetricMonitor',
            'temporal_augmentation', 
            'white_noise_augmentation',
            'ContrastiveDataset',
-           'contrastive_collate_fn', 
+           'ContrastiveDataLoader', 
            'save_umap_img', 
            'cosine_similarity_batch', 
            'moving_average'

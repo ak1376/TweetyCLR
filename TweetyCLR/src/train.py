@@ -16,9 +16,11 @@ from utils import moving_average
 import matplotlib.pyplot as plt
 import torch.nn as nn
 import numpy as np
+import torch.nn.functional as F
+
 
 class Trainer:
-    def __init__(self, model, train_dataloader, test_dataloader, loss_fn, optimizer, device, params, lr = 0.001, num_epochs = 100, batch_size = 64):
+    def __init__(self, model, train_dataloader, test_dataloader, loss_fn, optimizer, device, params, lr = 0.001, num_epochs = 100, batch_size = 64, temperature = 1):
         self.mdl = model.to(device)
         self.train_dataloader = train_dataloader
         self.test_dataloader = test_dataloader
@@ -42,10 +44,14 @@ class Trainer:
         self.train_losses = []
         self.test_losses = []
 
+        self.mdl = self.mdl.to(torch.float32)
+        self.tau = temperature
+
     def train(self):
         '''
         This function should run a training iteration of the model
         '''
+        
         for epoch in range(self.num_epochs):
             print(f"Epoch [{epoch+1}/{self.num_epochs}]")
             
@@ -53,18 +59,45 @@ class Trainer:
             self.mdl.train()
             running_train_loss = 0.0
             running_test_loss = 0.0
-            for batch_idx, (anchors, positives, negatives, anchor_labels, negative_labels) in enumerate(tqdm(self.train_dataloader, desc="Processing Batches")):
-                anchors = anchors.to(self.device, dtype=torch.float32)
-                positives = positives.to(self.device, dtype=torch.float32)
-                negatives = negatives.to(self.device, dtype=torch.float32)
+            for batch_idx, (batch, labels) in enumerate(tqdm(self.train_dataloader, desc="Processing Batches")):
+                actual_batch_size = batch.size(0)
+                if actual_batch_size < self.batch_size * 2:
+                    # If the actual batch size is less than double the expected batch size,
+                    # we cannot create full original and augmented pairs
+                    continue
                 
+                batch = batch.to(torch.float32)
                 # Forward pass
-                anchor_rep = self.mdl(anchors)
-                positive_rep = self.mdl(positives)
-                negative_rep = self.mdl(negatives)
-
                 # Compute loss
-                loss = self.loss_fn(ref=anchor_rep, pos=positive_rep, neg=negative_rep)
+                # Separate the original and augmented data
+                original_data = batch[:self.batch_size]  # Shape: (64, 1, 100, 151)
+                augmented_data = batch[self.batch_size:]  # Shape: (64, 1, 100, 151)
+
+                # Compute embeddings for the original and augmented data
+                original_embeddings = self.mdl(original_data)  # Shape: (64, embedding_dim)
+                augmented_embeddings = self.mdl(augmented_data)  # Shape: (64, embedding_dim)
+
+                # Normalize embeddings
+                original_embeddings = F.normalize(original_embeddings, dim=1)
+                augmented_embeddings = F.normalize(augmented_embeddings, dim=1)
+
+                # Compute similarities (dot products) between original and augmented embeddings
+                similarity_matrix = torch.mm(original_embeddings, augmented_embeddings.T)  # Shape: (64, 64)
+                similarity_matrix /= self.tau
+
+
+                # Create labels (positive pairs are diagonal elements)
+                labels = torch.arange(self.batch_size).long().to(batch.device)
+
+                # Compute the InfoNCE loss
+                loss = F.cross_entropy(similarity_matrix, labels)
+
+
+
+
+
+
+                # loss = self.loss_fn(ref=anchor_rep, pos=positive_rep, neg=negative_rep)
                 
                 # Backward pass and optimization
                 self.optimizer.zero_grad()
@@ -90,17 +123,39 @@ class Trainer:
                 with torch.no_grad():
                     try:
                         test_batch = next(iter(self.test_dataloader))
-                        test_anchors, test_positives, test_negatives, test_anchor_labels, test_negative_labels = test_batch
-                        test_anchors = test_anchors.to(self.device, dtype=torch.float32)
-                        test_positives = test_positives.to(self.device, dtype=torch.float32)
-                        test_negatives = test_negatives.to(self.device, dtype=torch.float32)
-                        
-                        test_anchor_rep = self.mdl(test_anchors)
-                        test_positive_rep = self.mdl(test_positives)
-                        test_negative_rep = self.mdl(test_negatives)
-                        
-                        test_loss = self.loss_fn(ref=test_anchor_rep, pos=test_positive_rep, neg=test_negative_rep)
-                        
+                        batch, labels = test_batch
+
+                        actual_batch_size = batch.size(0)
+                        if actual_batch_size < self.batch_size * 2:
+                            # If the actual batch size is less than double the expected batch size,
+                            # we cannot create full original and augmented pairs
+                            continue
+
+                        batch = batch.to(torch.float32)
+
+                        # Compute loss
+                        # Separate the original and augmented data
+                        original_data = batch[:self.batch_size]  # Shape: (64, 1, 100, 151)
+                        augmented_data = batch[self.batch_size:]  # Shape: (64, 1, 100, 151)
+
+                        # Compute embeddings for the original and augmented data
+                        original_embeddings = self.mdl(original_data)  # Shape: (64, embedding_dim)
+                        augmented_embeddings = self.mdl(augmented_data)  # Shape: (64, embedding_dim)
+
+                        # Normalize embeddings
+                        original_embeddings = F.normalize(original_embeddings, dim=1)
+                        augmented_embeddings = F.normalize(augmented_embeddings, dim=1)
+
+                        # Compute similarities (dot products) between original and augmented embeddings
+                        similarity_matrix = torch.mm(original_embeddings, augmented_embeddings.T)  # Shape: (64, 64)
+                        similarity_matrix /= self.tau
+
+                        # Create labels (positive pairs are diagonal elements)
+                        labels = torch.arange(self.batch_size).long().to(batch.device)
+
+                        # Compute the InfoNCE loss
+                        test_loss = F.cross_entropy(similarity_matrix, labels)
+
                         # Store testing loss
                         self.test_losses.append(test_loss.item())
                         running_test_loss += test_loss.item()
